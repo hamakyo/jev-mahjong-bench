@@ -6,3 +6,6 @@ results/**/*.json
 results/**/*.md
 !results/.gitkeep
 .DS_Store
+__pycache__/
+*.py[cod]
+*.egg-info/

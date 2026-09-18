@@ -1,0 +1,18 @@
+[project]
+name = "jev-mahjong-bench-python"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "riichienv==0.4.10",
+]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "python"}
+
+[tool.setuptools.packages.find]
+where = ["python"]
+

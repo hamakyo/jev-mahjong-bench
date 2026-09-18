@@ -1,0 +1,5 @@
+{
+  "command": ["node", "tests/fixtures/fake-mortal.mjs", "{seat}"],
+  "version": "ci-fake-1",
+  "config": { "fixture": true }
+}
