@@ -1,0 +1,26 @@
+{
+  "name": "jev-mahjong-bench",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Benchmark Jev and GPT on riichi mahjong discard decisions.",
+  "type": "module",
+  "license": "MIT",
+  "packageManager": "pnpm@10.34.5",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "bench": "tsx src/cli.ts",
+    "bench:sample": "tsx src/cli.ts --agents random --dataset datasets/sample.jsonl --out results/sample",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "check": "pnpm typecheck && pnpm test"
+  },
+  "dependencies": {
+    "@typesafe-ai/sdk": "^0.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}
