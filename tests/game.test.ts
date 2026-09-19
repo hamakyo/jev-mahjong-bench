@@ -2,7 +2,14 @@ import { describe, expect, it } from "vitest";
 import { countDiscardResponses, eventNeedsDiscardResponse, eventNeedsResponse, MortalAgent } from "../src/agents/mortal.js";
 import { gameDecisionInput, MortalGameAgent } from "../src/agents/game.js";
 import { RiichiEnvBridge } from "../src/game/bridge.js";
-import type { GameObservation, GameAction, DecisionSample } from "../src/types.js";
+import { inspectGameDecisionInput, MAX_LLM_INPUT_BYTES } from "../src/game/input.js";
+import type { GameObservation, GameAction, DecisionSample, GameDecisionInput } from "../src/types.js";
+
+const sizeTestAction: GameAction = {
+  id: "size-test-action",
+  type: "none",
+  mjai: { type: "none", actor: 0 },
+};
 
 describe("complete-game contracts", () => {
   it("counts calls and reach declarations as the following discard response", () => {
@@ -47,6 +54,40 @@ describe("complete-game contracts", () => {
     expect(gameDecisionInput(observation).legalActions[0]).toEqual(action);
   });
 
+  it("keeps a long Mortal history out of the bounded LLM input", () => {
+    const history = Array.from({ length: 10_000 }, (_, index) => JSON.stringify({ type: "dahai", actor: index % 4, pai: "1m" }));
+    const observation: GameObservation = {
+      player: 0,
+      newEvents: [history.at(-1)!],
+      events: history,
+      state: { round: "E1", hand: ["1m"] },
+      legalActions: [sizeTestAction],
+      gameId: "history-size",
+      handIndex: 0,
+      turnIndex: 10_000,
+    };
+    const input = gameDecisionInput(observation);
+    const diagnostics = inspectGameDecisionInput(input);
+    expect(input.state).not.toHaveProperty("mjaiEvents");
+    expect(diagnostics.recentEventCount).toBe(0);
+    expect(diagnostics.decisionInputBytes).toBeLessThan(MAX_LLM_INPUT_BYTES);
+  });
+
+  it("rejects replay history or oversized inputs before a provider call", () => {
+    expect(() => inspectGameDecisionInput({
+      id: "history-in-state",
+      state: { round: "E1", hand: ["1m"], mjaiEvents: ["{}"] },
+      legalActions: [sizeTestAction],
+    } as unknown as GameDecisionInput)).toThrow(/llm-input-contract/);
+
+    const oversized = {
+      id: "oversized",
+      state: { round: "E1", hand: ["1m"], extra: { padding: "x".repeat(MAX_LLM_INPUT_BYTES) } },
+      legalActions: [sizeTestAction],
+    };
+    expect(() => inspectGameDecisionInput(oversized)).toThrow(/maximum is 16384/);
+  });
+
   it("returns cumulative per-seat history from the bridge", async () => {
     const bridge = new RiichiEnvBridge();
     try {
@@ -62,7 +103,7 @@ describe("complete-game contracts", () => {
           const previousLength = previousByPlayer.get(observation.player) ?? 0;
           expect(observation.events.length).toBeGreaterThanOrEqual(previousLength);
           expect(observation.newEvents).toEqual(observation.events.slice(previousLength));
-          expect(observation.state.mjaiEvents).toEqual(observation.events);
+          expect(observation.state).not.toHaveProperty("mjaiEvents");
           expect(observation.events[0]).toContain('"type":"start_game"');
           previousByPlayer.set(observation.player, observation.events.length);
         }

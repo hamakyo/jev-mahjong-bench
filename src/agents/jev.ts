@@ -2,6 +2,7 @@ import { choice, TypeSafeClient } from "@typesafe-ai/sdk";
 import type { MahjongAgent } from "./agent.js";
 import type { AgentDecision, DecisionSample, GameDecisionInput } from "../types.js";
 import { canonicalJson } from "../mjai/tiles.js";
+import { inspectGameDecisionInput } from "../game/input.js";
 
 interface JevChoiceAnswer {
   choice: string;
@@ -62,6 +63,7 @@ export class JevAgent implements MahjongAgent {
 
   async decideGame(input: GameDecisionInput, signal?: AbortSignal): Promise<AgentDecision> {
     if (signal?.aborted) throw new Error("agent call aborted");
+    inspectGameDecisionInput(input);
     const options = Object.fromEntries(
       input.legalActions.map((action) => [
         action.id,

@@ -283,8 +283,18 @@ def meld_tiles_mpsz(melds: Iterable[Any]) -> list[str]:
     return result
 
 
-def observation_state(observation: Any, seat: int, events: list[str]) -> dict[str, Any]:
-    raw = observation.to_dict()
+def current_observation_state(
+    observation: Any,
+    seat: int,
+    events: list[str] | None = None,
+) -> dict[str, Any]:
+    """Build the bounded current state used by LLM agents.
+
+    The event prefix is used only to avoid exposing future dora indicators.
+    It is deliberately not serialized into the returned state; Mortal receives
+    the cumulative history through GameObservation.events instead.
+    """
+    event_history = events or []
     hands = attr_or_call(getattr(observation, "hands"))
     raw_hand = list(attr_or_call(getattr(observation, "hand")))
     drawn = attr_or_call(getattr(observation, "drawn_tile"))
@@ -298,7 +308,7 @@ def observation_state(observation: Any, seat: int, events: list[str]) -> dict[st
     kyoku_index = int(attr_or_call(getattr(observation, "kyoku_index")))
     oya = int(attr_or_call(getattr(observation, "oya")))
 
-    observable_dora = dora_indicators_from_events(events)
+    observable_dora = dora_indicators_from_events(event_history)
     state: dict[str, Any] = {
         "round": f"{WINDS[round_wind]}{kyoku_index + 1}",
         "seat": seat_name(seat, oya),
@@ -306,7 +316,6 @@ def observation_state(observation: Any, seat: int, events: list[str]) -> dict[st
         "scores": scores,
         "hand": [mpsz_from_riichi_tile(int(tile)) for tile in current_hand],
         "tileEncoding": "mpsz",
-        "mjaiEvents": events,
         # RiichiEnv 0.4.10 can expose a later kan dora in a replay
         # observation before that MJAI event is observable.  The event prefix
         # is authoritative at this boundary so samples never contain lookahead.
@@ -337,9 +346,13 @@ def observation_state(observation: Any, seat: int, events: list[str]) -> dict[st
     }
     if drawn is not None:
         state["drawnTile"] = mpsz_from_riichi_tile(int(drawn))
-    # Keep the raw observation only in local scope; hidden hands must never be
-    # copied into the public sample.
-    del raw
+    return state
+
+
+def observation_state(observation: Any, seat: int, events: list[str]) -> dict[str, Any]:
+    """Build the dataset state, including its reproducibility event prefix."""
+    state = current_observation_state(observation, seat, events)
+    state["mjaiEvents"] = events
     return state
 
 

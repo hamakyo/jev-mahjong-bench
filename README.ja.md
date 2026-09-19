@@ -161,6 +161,26 @@ pnpm tournament -- \
 情報、canonical設定SHA-256、エージェント別成績、Wilson区間、score/rankの
 Student-t区間、ペア差分を保存します。
 
+### LLM入力とMortal履歴
+
+完全対局のObservationでは、LLM入力とMortal履歴を分離しています。`state`は
+現在の公開局面だけを含む有界な状態で、Jev、GPT、Hybridへ渡されます。
+`state.mjaiEvents`はLLMへ渡しません。一方、Mortalには座席ごとの累積`events`
+と、前回から追加された`newEvents`のsuffixを渡します。長い牌譜履歴でLLM入力が
+膨張することを防ぎながら、外部Mortalに必要な完全prefixを保持します。
+
+provider呼び出し前にcanonicalなUTF-8 JSONサイズを計算し、16 KiBを超える入力は
+呼び出し前に拒否します。各判断ログには`decisionInputBytes`、`stateBytes`、
+`recentEventCount`（初期契約ではrecent eventを使わないため現在は0）を保存します。
+対局集計には平均・最大入力bytes、Hybridのエスカレーション数・率、provider別
+token数、retry数も含まれます。
+
+GPTは判断用と完全対局用で共通のResponses API request経路を使います。一時的な
+429/503は最大3回、retry総予算30秒まで再試行し、`Retry-After`を優先します。
+指定がない場合は上限付き指数backoffとjitterを使います。quota、billing、spend
+limitなどの恒久的エラーは再試行しません。試行回数、status、request ID、backoff
+合計は判断metadataに保存し、`max_output_tokens`は128に固定します。
+
 ## Jev確信度Hybrid
 
 HybridはまずJevに判断を依頼します。合法なJev手の確信度が閾値以上ならJevを

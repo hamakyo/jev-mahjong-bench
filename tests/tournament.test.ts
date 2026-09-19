@@ -49,4 +49,30 @@ describe("tournament agent call gate", () => {
     await expect(queued.promise).rejects.toMatchObject({ name: "AbortError" });
     expect(act).toHaveBeenCalledTimes(1);
   });
+
+  it("exposes metadata after a cancelled call settles", async () => {
+    let rejectCall!: (error: Error) => void;
+    const agent = {
+      id: "test",
+      lastMetadata: undefined as Record<string, unknown> | undefined,
+      lastUsage: undefined,
+      act: vi.fn(async (_observation: GameObservation, signal?: AbortSignal) => {
+        signal?.addEventListener("abort", () => {
+          setTimeout(() => {
+            agent.lastMetadata = { hybrid: { gpt: { metadata: { retryCount: 1 } } } };
+            rejectCall(new Error("agent call aborted"));
+          }, 5);
+        }, { once: true });
+        await new Promise<string>((_resolve, reject) => { rejectCall = reject; });
+        return action.id;
+      }),
+      cancel: vi.fn(),
+    };
+    const tails: AgentCallTails = new WeakMap();
+    const call = serializedAgentAct(agent, observation(2), tails);
+
+    await expect(timeout(call, 1)).rejects.toThrow(/timeout/);
+    await call.settled;
+    expect(agent.lastMetadata).toMatchObject({ hybrid: { gpt: { metadata: { retryCount: 1 } } } });
+  });
 });

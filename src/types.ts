@@ -37,6 +37,9 @@ export interface MahjongState {
 
 export type MjaiEvent = string | Record<string, unknown>;
 
+/** State sent to Jev/GPT/Hybrid.  Mortal history belongs to GameObservation.events. */
+export type LlmGameState = Omit<MahjongState, "mjaiEvents">;
+
 export interface DecisionSample {
   id: string;
   state: MahjongState;
@@ -108,7 +111,7 @@ export interface GameAction {
  * action id is only an identifier: type and MJAI are part of the choice. */
 export interface GameDecisionInput {
   id: string;
-  state: MahjongState;
+  state: LlmGameState;
   legalActions: GameAction[];
 }
 
@@ -118,7 +121,7 @@ export interface GameObservation {
   newEvents: string[];
   /** The cumulative visible MJAI history for this seat. */
   events: string[];
-  state: MahjongState;
+  state: LlmGameState;
   legalActions: GameAction[];
   gameId: string;
   handIndex: number;
@@ -145,6 +148,10 @@ export interface GameDecisionRecord {
   isLegal: boolean;
   fallbackReason?: string;
   latencyMs: number;
+  decisionInputBytes: number;
+  stateBytes: number;
+  recentEventCount: number;
+  retryCount: number;
   inputTokens?: number;
   outputTokens?: number;
   metadata?: Record<string, unknown>;
@@ -184,6 +191,16 @@ export interface SeatGameResult {
   fallbackCount: number;
   errorCount: number;
   latenciesMs: number[];
+  decisionInputBytes: number[];
+  stateBytes: number[];
+  retryCount: number;
+  escalationCount: number;
+  jevFallbackCount: number;
+  jevInputTokens: number;
+  jevOutputTokens: number;
+  gptInputTokens: number;
+  gptOutputTokens: number;
+  gptRetryCount: number;
   inputTokens: number;
   outputTokens: number;
   rawEventCounts: Record<string, number>;
@@ -222,6 +239,17 @@ export interface TournamentAgentSummary {
   meanLatencyMs: number;
   p50LatencyMs: number;
   p95LatencyMs: number;
+  meanInputBytes: number;
+  maxInputBytes: number;
+  escalationCount: number;
+  escalationRate: number;
+  retryCount: number;
+  jevFallbackCount: number;
+  jevInputTokens: number;
+  jevOutputTokens: number;
+  gptInputTokens: number;
+  gptOutputTokens: number;
+  gptRetryCount: number;
   inputTokens: number;
   outputTokens: number;
   inputTokensPerGame: number;

@@ -15,6 +15,7 @@ import { mortalReferencePolicy, type MortalConfig } from "../agents/mortal.js";
 import { aggregateTournament, renderTournamentMarkdown, type TournamentMetrics } from "./metrics.js";
 import { extractGameOutcomes } from "./outcomes.js";
 import { RiichiEnvBridge } from "../game/bridge.js";
+import { inspectGameDecisionInput, LlmInputContractError, type GameInputDiagnostics } from "../game/input.js";
 
 export interface TournamentOptions {
   seats: string[];
@@ -139,8 +140,12 @@ export interface AgentCallResult {
 
 export interface AgentCall<T> {
   promise: Promise<T>;
+  /** Resolves when the underlying call has settled, including after cancel. */
+  settled?: Promise<void>;
   cancel: () => void;
 }
+
+const CANCEL_SETTLE_TIMEOUT_MS = 50;
 
 function abortedError(): Error {
   const error = new Error("agent call aborted");
@@ -166,9 +171,11 @@ export function serializedAgentAct(
       return { action, metadata: agent.lastMetadata, usage: agent.lastUsage };
     });
   });
-  tails.set(agent, current.then(() => undefined, () => undefined));
+  const settled = current.then(() => undefined, () => undefined);
+  tails.set(agent, settled);
   return {
     promise: current,
+    settled,
     cancel: () => {
       if (cancelled) return;
       cancelled = true;
@@ -185,7 +192,9 @@ export function timeout<T>(call: AgentCall<T>, timeoutMs: number): Promise<T> {
       if (settled) return;
       settled = true;
       call.cancel();
-      reject(new Error(`agent exceeded ${timeoutMs}ms timeout`));
+      const error = new Error(`agent exceeded ${timeoutMs}ms timeout`);
+      error.name = "TimeoutError";
+      reject(error);
     }, timeoutMs);
     call.promise.then((value) => {
       if (settled) return;
@@ -201,6 +210,14 @@ export function timeout<T>(call: AgentCall<T>, timeoutMs: number): Promise<T> {
   });
 }
 
+async function waitForCancelledCall(call: AgentCall<unknown>): Promise<void> {
+  if (!call.settled) return;
+  await Promise.race([
+    call.settled,
+    new Promise<void>((resolve) => setTimeout(resolve, CANCEL_SETTLE_TIMEOUT_MS)),
+  ]);
+}
+
 function fallbackAction(observation: GameObservation): GameAction {
   const pass = observation.legalActions.find((action) => action.type === "none");
   if (pass) return pass;
@@ -213,6 +230,61 @@ function fallbackAction(observation: GameObservation): GameAction {
   return first;
 }
 
+function objectValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function numberValue(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function hybridMetadata(metadata: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  return objectValue(metadata?.hybrid);
+}
+
+function hybridProviderMetadata(
+  metadata: Record<string, unknown> | undefined,
+  provider: "jev" | "gpt",
+): Record<string, unknown> | undefined {
+  return objectValue(hybridMetadata(metadata)?.[provider]);
+}
+
+function providerRetryCount(
+  metadata: Record<string, unknown> | undefined,
+  provider: "jev" | "gpt",
+): number {
+  return numberValue(objectValue(hybridProviderMetadata(metadata, provider)?.metadata)?.retryCount);
+}
+
+function retryCountFromMetadata(metadata: Record<string, unknown> | undefined): number {
+  const hybrid = hybridMetadata(metadata);
+  if (hybrid) {
+    return providerRetryCount(metadata, "jev") + providerRetryCount(metadata, "gpt");
+  }
+  return numberValue(metadata?.retryCount);
+}
+
+function providerTokenUsage(
+  record: GameDecisionRecord,
+  provider: "jev" | "gpt",
+  token: "inputTokens" | "outputTokens",
+): number {
+  const providerRecord = hybridProviderMetadata(record.metadata, provider);
+  const usage = objectValue(providerRecord?.usage);
+  if (usage) return numberValue(usage[token]);
+  if (provider === "jev" && record.agentId === "jev") return record[token] ?? 0;
+  if (provider === "gpt" && record.agentId.startsWith("gpt:")) return record[token] ?? 0;
+  return 0;
+}
+
+function isHybridEscalated(metadata: Record<string, unknown> | undefined): boolean {
+  return hybridMetadata(metadata)?.escalated === true;
+}
+
+function isJevFallback(metadata: Record<string, unknown> | undefined): boolean {
+  return hybridMetadata(metadata)?.finalSource === "jev-fallback";
+}
+
 async function decide(
   observation: GameObservation,
   agent: GameAgentWithMetadata,
@@ -220,19 +292,50 @@ async function decide(
   tails: AgentCallTails,
 ): Promise<{ action: GameAction; record: GameDecisionRecord }> {
   const started = performance.now();
+  // A contract failure can happen before serializedAgentAct starts the
+  // provider. Clear per-call diagnostics so a previous turn is never copied
+  // into this failed decision record.
+  agent.lastMetadata = undefined;
+  agent.lastUsage = undefined;
+  let inputDiagnostics: GameInputDiagnostics = {
+    decisionInputBytes: 0,
+    stateBytes: 0,
+    recentEventCount: 0,
+  };
   let requestedActionId: string | undefined;
   let callMetadata: Record<string, unknown> | undefined;
   let callUsage: { inputTokens?: number; outputTokens?: number } | undefined;
   let error: string | undefined;
   let fallbackReason: string | undefined;
+  let inputContractError: unknown;
+  let call: AgentCall<AgentCallResult> | undefined;
   try {
-    const result = await timeout(serializedAgentAct(agent, observation, tails), timeoutMs);
+    inputDiagnostics = inspectGameDecisionInput({
+      id: `${observation.gameId}/${observation.turnIndex}/${observation.player}`,
+      state: observation.state,
+      legalActions: observation.legalActions,
+    });
+  } catch (reason) {
+    inputContractError = reason;
+    if (reason instanceof LlmInputContractError) inputDiagnostics = reason.diagnostics;
+  }
+  try {
+    if (inputContractError) throw inputContractError;
+    call = serializedAgentAct(agent, observation, tails);
+    const result = await timeout(call, timeoutMs);
     requestedActionId = result.action;
     callMetadata = result.metadata;
     callUsage = result.usage;
   } catch (reason) {
+    if (reason instanceof Error && reason.name === "TimeoutError" && call) {
+      await waitForCancelledCall(call);
+    }
     error = reason instanceof Error ? reason.message : String(reason);
-    fallbackReason = error.includes("timeout") ? "timeout" : "agent-error";
+    fallbackReason = reason instanceof LlmInputContractError
+      ? "llm-input-contract"
+      : error.includes("timeout") ? "timeout" : "agent-error";
+    callMetadata = agent.lastMetadata;
+    callUsage = agent.lastUsage;
   }
   const requested = requestedActionId ? observation.legalActions.find((action) => action.id === requestedActionId) : undefined;
   if (!requested && !fallbackReason) fallbackReason = "illegal-action";
@@ -250,6 +353,10 @@ async function decide(
     isLegal: Boolean(requested),
     ...(fallbackReason ? { fallbackReason } : {}),
     latencyMs: performance.now() - started,
+    decisionInputBytes: inputDiagnostics.decisionInputBytes,
+    stateBytes: inputDiagnostics.stateBytes,
+    recentEventCount: inputDiagnostics.recentEventCount,
+    retryCount: retryCountFromMetadata(callMetadata),
     ...(callUsage && typeof callUsage.inputTokens === "number" ? { inputTokens: callUsage.inputTokens } : {}),
     ...(callUsage && typeof callUsage.outputTokens === "number" ? { outputTokens: callUsage.outputTokens } : {}),
     ...(callMetadata ? { metadata: callMetadata } : {}),
@@ -269,6 +376,7 @@ function playerResult(
 ): SeatGameResult {
   const ownRecords = records.filter((record) => record.player === seat);
   const outcome = outcomes.seats[seat]!;
+  const inputBytes = ownRecords.map((record) => record.decisionInputBytes);
   return {
     gameId: game.gameId,
     seed: game.seed,
@@ -289,6 +397,19 @@ function playerResult(
     fallbackCount: ownRecords.filter((record) => Boolean(record.fallbackReason)).length,
     errorCount: ownRecords.filter((record) => Boolean(record.error)).length,
     latenciesMs: ownRecords.map((record) => record.latencyMs),
+    decisionInputBytes: inputBytes,
+    stateBytes: ownRecords.map((record) => record.stateBytes),
+    retryCount: ownRecords.reduce((sum, record) => sum + record.retryCount, 0),
+    escalationCount: ownRecords.filter((record) => isHybridEscalated(record.metadata)).length,
+    jevFallbackCount: ownRecords.filter((record) => isJevFallback(record.metadata)).length,
+    jevInputTokens: ownRecords.reduce((sum, record) => sum + providerTokenUsage(record, "jev", "inputTokens"), 0),
+    jevOutputTokens: ownRecords.reduce((sum, record) => sum + providerTokenUsage(record, "jev", "outputTokens"), 0),
+    gptInputTokens: ownRecords.reduce((sum, record) => sum + providerTokenUsage(record, "gpt", "inputTokens"), 0),
+    gptOutputTokens: ownRecords.reduce((sum, record) => sum + providerTokenUsage(record, "gpt", "outputTokens"), 0),
+    gptRetryCount: ownRecords.reduce((sum, record) => {
+      const provider = hybridProviderMetadata(record.metadata, "gpt");
+      return sum + (provider ? providerRetryCount(record.metadata, "gpt") : record.agentId.startsWith("gpt:") ? record.retryCount : 0);
+    }, 0),
     inputTokens: ownRecords.reduce((sum, record) => sum + (record.inputTokens ?? 0), 0),
     outputTokens: ownRecords.reduce((sum, record) => sum + (record.outputTokens ?? 0), 0),
     rawEventCounts: outcome.rawEventCounts,

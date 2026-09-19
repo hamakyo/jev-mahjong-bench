@@ -9,7 +9,7 @@ from typing import Any
 
 from riichienv import GameRule, RiichiEnv
 
-from .importer import canonical_json, compact_event, observation_state, visible_event
+from .importer import canonical_json, compact_event, current_observation_state, visible_event
 
 
 def stable_id(value: dict[str, Any]) -> str:
@@ -51,7 +51,7 @@ def serialize_observation(
     if previous_events and events[:len(previous_events)] != previous_events:
         raise ValueError(f"MJAI history for player {player} is not append-only")
     new_events = events[len(previous_events):]
-    state = observation_state(observation, player, events)
+    state = current_observation_state(observation, player, events)
     legal: list[dict[str, Any]] = []
     seen: set[str] = set()
     for action in observation.legal_actions():

@@ -90,5 +90,13 @@ jobs:
                   raise AssertionError('validator accepted an extra illegal discard')
           PY
       - run: pnpm tournament -- --seats random,random,random,random --paired-runs 1 --mode 4p-red-east --rule tenhou --seed 42 --seat-policy rotate --out /tmp/tournament
+      - run: |
+          node -e '
+            const fs = require("node:fs");
+            const report = JSON.parse(fs.readFileSync("/tmp/tournament/tournament.json", "utf8"));
+            if (report.errorCount !== 0) throw new Error(`tournament errorCount=${report.errorCount}`);
+            const maxInputBytes = Math.max(0, ...(report.metrics?.agents ?? []).map((agent) => agent.maxInputBytes ?? 0));
+            if (maxInputBytes >= 16384) throw new Error(`LLM input reached ${maxInputBytes} bytes`);
+          '
       - run: pnpm dataset:import -- --input /tmp/tournament/games --platform tenhou --game-id ci-tournament --out /tmp/tournament-samples.jsonl
       - run: pnpm dataset:validate -- --dataset /tmp/tournament-samples.jsonl

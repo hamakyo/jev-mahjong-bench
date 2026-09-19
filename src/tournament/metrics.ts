@@ -100,6 +100,7 @@ function summaryFor(agentId: string, games: TournamentGameResult[]): TournamentA
   const scoreValues = players.map((player) => player.score);
   const rankValues = players.map((player) => player.rank);
   const latencyValues = players.flatMap((player) => player.latenciesMs);
+  const inputByteValues = players.flatMap((player) => player.decisionInputBytes);
   const wins = players.reduce((sum, player) => sum + player.wins, 0);
   const dealIns = players.reduce((sum, player) => sum + player.dealIns, 0);
   const riichi = players.reduce((sum, player) => sum + player.riichi, 0);
@@ -109,6 +110,14 @@ function summaryFor(agentId: string, games: TournamentGameResult[]): TournamentA
   const errorCount = players.reduce((sum, player) => sum + player.errorCount, 0);
   const inputTokens = players.reduce((sum, player) => sum + player.inputTokens, 0);
   const outputTokens = players.reduce((sum, player) => sum + player.outputTokens, 0);
+  const escalationCount = players.reduce((sum, player) => sum + player.escalationCount, 0);
+  const retryCount = players.reduce((sum, player) => sum + player.retryCount, 0);
+  const jevFallbackCount = players.reduce((sum, player) => sum + player.jevFallbackCount, 0);
+  const jevInputTokens = players.reduce((sum, player) => sum + player.jevInputTokens, 0);
+  const jevOutputTokens = players.reduce((sum, player) => sum + player.jevOutputTokens, 0);
+  const gptInputTokens = players.reduce((sum, player) => sum + player.gptInputTokens, 0);
+  const gptOutputTokens = players.reduce((sum, player) => sum + player.gptOutputTokens, 0);
+  const gptRetryCount = players.reduce((sum, player) => sum + player.gptRetryCount, 0);
   const scoreBlocks = blockMeans(games, agentId, "score");
   const rankBlocks = blockMeans(games, agentId, "rank");
   const enoughPairsForIntervals = scoreBlocks.length >= 2 && rankBlocks.length >= 2;
@@ -140,6 +149,17 @@ function summaryFor(agentId: string, games: TournamentGameResult[]): TournamentA
     meanLatencyMs: mean(latencyValues),
     p50LatencyMs: percentile(latencyValues, 0.5),
     p95LatencyMs: percentile(latencyValues, 0.95),
+    meanInputBytes: mean(inputByteValues),
+    maxInputBytes: inputByteValues.length ? Math.max(...inputByteValues) : 0,
+    escalationCount,
+    escalationRate: decisionCount ? escalationCount / decisionCount : 0,
+    retryCount,
+    jevFallbackCount,
+    jevInputTokens,
+    jevOutputTokens,
+    gptInputTokens,
+    gptOutputTokens,
+    gptRetryCount,
     inputTokens,
     outputTokens,
     inputTokensPerGame: gameCount ? inputTokens / gameCount : 0,
@@ -211,15 +231,15 @@ function percent(value: number): string { return `${(value * 100).toFixed(1)}%`;
 
 export function renderTournamentMarkdown(metrics: TournamentMetrics): string {
   const rows = metrics.agents.map((agent) =>
-    `| ${agent.agentId} | ${agent.games} | ${estimateIntervalText(agent.meanScore, agent.scoreInterval)} | ${estimateIntervalText(agent.meanRank, agent.rankInterval)} | ${percent(agent.firstRate)} | ${percent(agent.fourthRate)} | ${percent(agent.winRate)} | ${percent(agent.dealInRate)} | ${percent(agent.riichiRate)} | ${percent(agent.callRate)} | ${agent.decisions} | ${agent.p50LatencyMs.toFixed(1)} / ${agent.p95LatencyMs.toFixed(1)} | ${agent.inputTokens} / ${agent.outputTokens} |`);
+    `| ${agent.agentId} | ${agent.games} | ${estimateIntervalText(agent.meanScore, agent.scoreInterval)} | ${estimateIntervalText(agent.meanRank, agent.rankInterval)} | ${percent(agent.firstRate)} | ${percent(agent.fourthRate)} | ${percent(agent.winRate)} | ${percent(agent.dealInRate)} | ${percent(agent.riichiRate)} | ${percent(agent.callRate)} | ${agent.decisions} | ${agent.p50LatencyMs.toFixed(1)} / ${agent.p95LatencyMs.toFixed(1)} | ${agent.meanInputBytes.toFixed(0)} / ${agent.maxInputBytes} | ${percent(agent.escalationRate)} | ${agent.retryCount} | ${agent.jevInputTokens} / ${agent.jevOutputTokens} | ${agent.gptInputTokens} / ${agent.gptOutputTokens} |`);
   const pairRows = metrics.pairwise.map((pair) =>
     `| ${pair.leftAgentId} − ${pair.rightAgentId} | ${pair.pairs} | ${estimateIntervalText(pair.meanScoreDifference, pair.scoreDifferenceInterval)} | ${estimateIntervalText(pair.meanRankDifference, pair.rankDifferenceInterval)} |`);
   return `# Tournament report
 
 Score/rank columns show pair-block mean and 95% interval. Rates are Wilson 95% intervals in JSON.
 
-| Agent | Games | Score mean [95% CI] | Rank mean [95% CI] | 1st | 4th | Win | Deal-in | Riichi | Call | Decisions | p50 / p95 ms | Tokens in / out |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Agent | Games | Score mean [95% CI] | Rank mean [95% CI] | 1st | 4th | Win | Deal-in | Riichi | Call | Decisions | p50 / p95 ms | Input bytes avg / max | Escalation | Retries | Jev in / out | GPT in / out |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 ${rows.join("\n")}
 
 ## Pairwise differences

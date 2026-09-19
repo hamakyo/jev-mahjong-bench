@@ -8,12 +8,14 @@ import type {
 import { GptAgent } from "./gpt.js";
 import { JevAgent } from "./jev.js";
 import type { MahjongAgent } from "./agent.js";
+import { inspectGameDecisionInput } from "../game/input.js";
 
 export interface HybridProviderRecord {
   action?: string;
   confidence: number | null;
   latencyMs: number;
   usage: TokenUsage;
+  metadata?: Record<string, unknown>;
   error?: string;
 }
 
@@ -23,8 +25,9 @@ export interface HybridMetadata {
   escalated: boolean;
   escalationReason?: string;
   gpt?: HybridProviderRecord;
-  finalSource: "jev" | "gpt" | "jev-fallback";
-  finalAction: string;
+  finalSource: "jev" | "gpt" | "jev-fallback" | "error";
+  finalAction?: string;
+  error?: string;
 }
 
 export interface HybridProvider<T> {
@@ -63,6 +66,7 @@ function providerRecord(
   decision: AgentDecision | undefined,
   latencyMs: number,
   error?: string,
+  failureMetadata?: Record<string, unknown>,
 ): HybridProviderRecord {
   const confidence = typeof decision?.confidence === "number" && Number.isFinite(decision.confidence)
     ? decision.confidence
@@ -72,12 +76,42 @@ function providerRecord(
     confidence,
     latencyMs,
     usage: usage(decision?.usage),
+    ...(decision?.metadata ? { metadata: decision.metadata } : failureMetadata ? { metadata: failureMetadata } : {}),
     ...(error ? { error } : {}),
   };
 }
 
 function errorText(value: unknown): string {
   return value instanceof Error ? value.message : String(value);
+}
+
+function errorMetadata(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const metadata = (value as { metadata?: unknown }).metadata;
+  return metadata && typeof metadata === "object" && !Array.isArray(metadata)
+    ? metadata as Record<string, unknown>
+    : undefined;
+}
+
+function hybridFailure(
+  message: string,
+  threshold: number,
+  jev: HybridProviderRecord,
+  gpt: HybridProviderRecord,
+  escalationReason: string | undefined,
+): Error {
+  const error = new Error(message);
+  const metadata: HybridMetadata = {
+    threshold,
+    jev,
+    escalated: true,
+    ...(escalationReason ? { escalationReason } : {}),
+    gpt,
+    finalSource: "error",
+    error: message,
+  };
+  Object.assign(error, { metadata: { hybrid: metadata } });
+  return error;
 }
 
 function publicConfidence(value: number | undefined): number | undefined {
@@ -98,13 +132,15 @@ export async function runHybridDecision<T>(
   const jevStarted = performance.now();
   let jevDecision: AgentDecision | undefined;
   let jevError: string | undefined;
+  let jevFailureMetadata: Record<string, unknown> | undefined;
   try {
     jevDecision = await calls.jev(input, signal);
   } catch (error) {
     jevError = errorText(error);
+    jevFailureMetadata = errorMetadata(error);
   }
   const jevLatency = performance.now() - jevStarted;
-  const jevRecord = providerRecord(jevDecision, jevLatency, jevError);
+  const jevRecord = providerRecord(jevDecision, jevLatency, jevError, jevFailureMetadata);
   const jevLegal = typeof jevDecision?.action === "string" && legalActions.includes(jevDecision.action);
   const confidence = jevDecision?.confidence;
   const confidenceValid = typeof confidence === "number" && Number.isFinite(confidence) && confidence >= 0 && confidence <= 1;
@@ -138,13 +174,19 @@ export async function runHybridDecision<T>(
   const gptStarted = performance.now();
   let gptDecision: AgentDecision | undefined;
   let gptError: string | undefined;
+  let gptFailureMetadata: Record<string, unknown> | undefined;
   try {
     gptDecision = await calls.gpt(input, signal);
   } catch (error) {
     gptError = errorText(error);
+    gptFailureMetadata = errorMetadata(error);
   }
-  if (signal?.aborted) throw new Error("agent call aborted");
-  const gptRecord = providerRecord(gptDecision, performance.now() - gptStarted, gptError);
+  const gptRecord = providerRecord(gptDecision, performance.now() - gptStarted, gptError, gptFailureMetadata);
+  if (signal?.aborted) {
+    const aborted = hybridFailure("agent call aborted", threshold, jevRecord, gptRecord, escalationReason);
+    aborted.name = "AbortError";
+    throw aborted;
+  }
   const gptLegal = typeof gptDecision?.action === "string" && legalActions.includes(gptDecision.action);
   if (gptLegal && gptDecision) {
     const finalConfidence = publicConfidence(gptDecision.confidence);
@@ -187,7 +229,8 @@ export async function runHybridDecision<T>(
     };
   }
 
-  throw new Error(`Hybrid decision failed: ${gptError ?? "GPT returned an illegal action"}`);
+  const failure = gptError ?? "GPT returned an illegal action";
+  throw hybridFailure(`Hybrid decision failed: ${failure}`, threshold, jevRecord, gptRecord, escalationReason);
 }
 
 export class HybridAgent implements MahjongAgent {
@@ -226,6 +269,7 @@ export function hybridGameDecision(
   providers: HybridGameProviders,
   signal?: AbortSignal,
 ): Promise<AgentDecision> {
+  inspectGameDecisionInput(input);
   return runHybridDecision(input, input.legalActions.map((action) => action.id), threshold, {
     jev: (value, providerSignal) => providers.jev.decide(value, providerSignal),
     gpt: (value, providerSignal) => providers.gpt.decide(value, providerSignal),

@@ -206,6 +206,28 @@ available, otherwise the normalized MJAI action with the smallest stable JSON
 ordering; requested and applied actions remain separate in every decision
 record.
 
+### LLM input and Mortal history
+
+Complete-game observations keep two deliberately separate interfaces. The
+bounded `state` contains only the current public state and is sent to Jev, GPT,
+and Hybrid. It never contains `state.mjaiEvents`. Mortal receives the cumulative
+per-seat `events` history and the append-only `newEvents` suffix instead. This
+keeps long replay histories out of provider inputs while preserving the full
+prefix required by an external Mortal process.
+
+Before a provider call, the canonical UTF-8 JSON size is checked against the
+16 KiB limit. Every game decision records `decisionInputBytes`, `stateBytes`,
+and `recentEventCount` (currently zero because recent events are not part of
+the initial contract). Tournament summaries include average and maximum input
+bytes, escalation counts/rates, provider token totals, and retry counts.
+
+GPT uses a shared Responses API request path for decision and full-game calls.
+Temporary 429/503 responses are retried at most three times with a 30-second
+retry budget, preferring `Retry-After` and otherwise using bounded exponential
+backoff with jitter. Quota, billing, spend-limit, and other permanent errors
+are not retried. Retry attempts, statuses, request IDs, and total backoff are
+kept in decision metadata; `max_output_tokens` is fixed at 128.
+
 For a paired benchmark, use `--paired-runs` instead of `--games`. Each base
 seed runs every unique circular seat rotation, so four distinct agents produce
 four games per pair block. Duplicate seat assignments are de-duplicated.

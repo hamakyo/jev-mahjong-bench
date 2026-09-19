@@ -71,6 +71,59 @@ describe("Hybrid decision", () => {
     });
   });
 
+  it("preserves GPT retry metadata through a Jev fallback", async () => {
+    const error = Object.assign(new Error("rate limited"), {
+      metadata: { attempts: 3, retryCount: 2, totalBackoffMs: 500, statuses: [429, 429, 429] },
+    });
+    const result = await runHybridDecision(sample, sample.legalActions, 0.75, {
+      jev: async () => decision("a", 0.1),
+      gpt: async () => { throw error; },
+    });
+    expect(result.metadata).toMatchObject({
+      hybrid: { finalSource: "jev-fallback", gpt: { metadata: error.metadata } },
+    });
+  });
+
+  it("preserves both provider records when Hybrid fails completely", async () => {
+    const gptError = Object.assign(new Error("rate limited"), {
+      metadata: { attempts: 3, retryCount: 2, totalBackoffMs: 500, statuses: [503, 503, 503] },
+    });
+    const result = runHybridDecision(sample, sample.legalActions, 0.75, {
+      jev: async () => decision("illegal", 0.9),
+      gpt: async () => { throw gptError; },
+    });
+    await expect(result).rejects.toMatchObject({
+      message: "Hybrid decision failed: rate limited",
+      metadata: {
+        hybrid: {
+          finalSource: "error",
+          jev: { action: "illegal" },
+          gpt: { metadata: gptError.metadata, error: "rate limited" },
+        },
+      },
+    });
+  });
+
+  it("preserves retry metadata when GPT aborts during Hybrid", async () => {
+    const controller = new AbortController();
+    const gptError = Object.assign(new Error("agent call aborted"), {
+      name: "AbortError",
+      metadata: { attempts: 2, retryCount: 1, totalBackoffMs: 500, statuses: [503, 503] },
+    });
+    const result = runHybridDecision(sample, sample.legalActions, 0.75, {
+      jev: async () => decision("illegal", 0.9),
+      gpt: async () => {
+        controller.abort();
+        throw gptError;
+      },
+    }, controller.signal);
+    await expect(result).rejects.toMatchObject({
+      name: "AbortError",
+      message: "agent call aborted",
+      metadata: { hybrid: { finalSource: "error", gpt: { metadata: gptError.metadata } } },
+    });
+  });
+
   it("rejects an aborted GPT call instead of returning a fallback", async () => {
     const controller = new AbortController();
     const promise = runHybridDecision(sample, sample.legalActions, 0.75, {

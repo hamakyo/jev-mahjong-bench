@@ -2,7 +2,8 @@ import { createInterface } from "node:readline";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { GameAction, GameAgent, GameDecisionInput, GameObservation } from "../types.js";
 import { canonicalJson, mjaiToMpsz } from "../mjai/tiles.js";
-import { GptAgent } from "./gpt.js";
+import { inspectGameDecisionInput } from "../game/input.js";
+import { GptAgent, GptRequestError } from "./gpt.js";
 import { hybridGameDecision, validateHybridThreshold } from "./hybrid.js";
 import { JevAgent } from "./jev.js";
 import { eventNeedsResponse, responseActor, type MortalConfig, mortalReferencePolicy } from "./mortal.js";
@@ -23,6 +24,14 @@ function throwIfAborted(signal?: AbortSignal): void {
     error.name = "AbortError";
     throw error;
   }
+}
+
+function metadataFromError(error: unknown): Record<string, unknown> | undefined {
+  if (!error || typeof error !== "object" || Array.isArray(error)) return undefined;
+  const metadata = (error as { metadata?: unknown }).metadata;
+  return metadata && typeof metadata === "object" && !Array.isArray(metadata)
+    ? metadata as Record<string, unknown>
+    : undefined;
 }
 
 function hash32(input: string): number {
@@ -51,11 +60,13 @@ export class RandomGameAgent implements GameAgentWithMetadata {
 }
 
 export function gameDecisionInput(observation: GameObservation): GameDecisionInput {
-  return {
+  const input: GameDecisionInput = {
     id: `${observation.gameId}/${observation.turnIndex}/${observation.player}`,
     state: observation.state,
     legalActions: observation.legalActions,
   };
+  inspectGameDecisionInput(input);
+  return input;
 }
 
 export class JevGameAgent implements GameAgentWithMetadata {
@@ -107,6 +118,10 @@ export class GptGameAgent implements GameAgentWithMetadata {
       this.lastMetadata = decision.metadata;
       this.lastUsage = decision.usage;
       return decision.action;
+    } catch (error) {
+      if (error instanceof GptRequestError) this.lastMetadata = { ...error.metadata };
+      else this.lastMetadata = metadataFromError(error);
+      throw error;
     } finally {
       signal?.removeEventListener("abort", abort);
       this.controllers.delete(controller);
@@ -158,6 +173,9 @@ export class HybridGameAgent implements GameAgentWithMetadata {
       this.lastMetadata = decision.metadata;
       this.lastUsage = decision.usage;
       return decision.action;
+    } catch (error) {
+      this.lastMetadata = metadataFromError(error);
+      throw error;
     } finally {
       signal?.removeEventListener("abort", abort);
       this.controllers.delete(controller);

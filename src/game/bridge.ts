@@ -2,7 +2,8 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import type { GameAction, GameObservation, MahjongState } from "../types.js";
+import type { GameAction, GameObservation, LlmGameState } from "../types.js";
+import { assertLlmGameState } from "./input.js";
 
 interface WireResponse {
   ok: boolean;
@@ -51,12 +52,17 @@ function parseObservation(value: unknown): GameObservation {
     throw new Error("Bridge returned newEvents that are not the cumulative-history suffix");
   }
   if (!item.state || typeof item.state !== "object" || Array.isArray(item.state)) throw new Error("Bridge returned invalid state");
+  try {
+    assertLlmGameState(item.state);
+  } catch (error) {
+    throw new Error(error instanceof Error ? error.message : String(error));
+  }
   if (!Array.isArray(item.legalActions)) throw new Error("Bridge returned invalid legalActions");
   return {
     player: item.player as number,
     newEvents: newEvents as string[],
     events: events as string[],
-    state: item.state as MahjongState,
+    state: item.state as LlmGameState,
     legalActions: item.legalActions.map(parseAction),
     gameId: item.gameId,
     handIndex: item.handIndex as number,
