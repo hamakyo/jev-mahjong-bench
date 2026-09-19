@@ -7,6 +7,13 @@
 Measure decision latency, reference-action agreement, legality, calibration, and usage on exactly the same mahjong states.
 
 [![CI](https://github.com/hamakyo/jev-mahjong-bench/actions/workflows/ci.yml/badge.svg)](https://github.com/hamakyo/jev-mahjong-bench/actions/workflows/ci.yml)
+[![Node.js 20+](https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![pnpm 10.34.5](https://img.shields.io/badge/pnpm-10.34.5-F69220?logo=pnpm&logoColor=white)](https://pnpm.io/)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![RiichiEnv 0.4.10](https://img.shields.io/badge/RiichiEnv-0.4.10-4B5563)](https://github.com/smly/RiichiEnv)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+
+[日本語版](README.ja.md)
 
 </div>
 
