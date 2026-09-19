@@ -3,6 +3,10 @@ dist/
 .env
 .env.local
 results/**/*.json
+results/**/*.jsonl
 results/**/*.md
 !results/.gitkeep
 .DS_Store
+__pycache__/
+*.py[cod]
+*.egg-info/

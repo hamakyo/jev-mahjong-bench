@@ -1,0 +1,4 @@
+{"type":"start_game","id":"mjsoul-rule-probe"}
+{"bakaze":"E","dora_marker":"9m","honba":0,"kyoku":1,"kyotaku":0,"oya":0,"scores":[25000,25000,25000,25000],"tehais":[["5mr","5m","8m","1p","1p","4p","6p","3s","3s","E","N","P","C"],["1m","1m","2m","7m","7p","8p","3s","4s","6s","S","P","P","C"],["3m","4m","7m","9m","9m","5p","6p","8p","9p","1s","2s","2s","7s"],["3m","4m","4m","8m","2p","3p","4p","5p","7p","9p","W","W","N"]],"type":"start_kyoku"}
+{"actor":0,"pai":"6s","type":"tsumo"}
+{"actor":0,"pai":"5mr","tsumogiri":false,"type":"dahai"}

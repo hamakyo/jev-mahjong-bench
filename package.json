@@ -10,6 +10,12 @@
   "scripts": {
     "bench": "tsx src/cli.ts",
     "bench:sample": "tsx src/cli.ts --agents random --dataset datasets/sample.jsonl --out results/sample",
+    "dataset:import": "tsx src/cli.ts dataset:import",
+    "dataset:validate": "tsx src/cli.ts dataset:validate",
+    "dataset:stats": "tsx src/cli.ts dataset:stats",
+    "reference:mortal": "tsx src/cli.ts reference:mortal",
+    "tournament": "tsx src/cli.ts tournament",
+    "hybrid:sweep": "tsx src/cli.ts hybrid:sweep",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "check": "pnpm typecheck && pnpm test"

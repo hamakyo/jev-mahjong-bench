@@ -2,7 +2,7 @@
 
 # jev-mahjong-bench
 
-**Jev vs GPT for riichi mahjong discard decisions**
+**Jev vs GPT for riichi mahjong decisions and paired games**
 
 Measure decision latency, reference-action agreement, legality, calibration, and usage on exactly the same mahjong states.
 
@@ -45,6 +45,9 @@ pnpm bench:sample
 
 The sample benchmark is fully offline.
 
+The replay importer and full-game bridge use Python through `uv`.  The
+RiichiEnv dependency is pinned to `0.4.10` in `pyproject.toml`/`uv.lock`.
+
 ### Run Jev and GPT
 
 ```bash
@@ -53,8 +56,9 @@ cp .env.example .env
 set -a && source .env && set +a
 
 pnpm bench -- \
-  --agents jev,gpt,random \
+  --agents jev,gpt,hybrid,random \
   --dataset datasets/sample.jsonl \
+  --hybrid-threshold 0.75 \
   --out results/live
 ```
 
@@ -87,19 +91,161 @@ One JSON object per line:
 }
 ```
 
-For real evaluations, document the source of `referenceAction`. If Mortal is the reference, report **Mortal agreement**, not absolute accuracy.
+For real evaluations, document the source of `referenceAction`. If Mortal is the reference, report **Mortal agreement**, not absolute accuracy. Mixed or undocumented policies use **Reference agreement** with a policy-count breakdown.
+
+Replay-derived samples also contain `state.tileEncoding: "mpsz"`, visible
+`state.mjaiEvents`, `observedAction`, and privacy-safe provenance.  The raw game
+ID is never written; provenance stores only `sha256(platform + gameId)`.
+
+## MJAI replay import
+
+Tenhou XML and Mahjong Soul protobuf conversion is an external preprocessing
+step.  This repository accepts the resulting MJAI JSONL (or `.mjson`) only.
+Plain and gzip-compressed files are supported; directories are processed
+recursively in dictionary order.
+
+```bash
+pnpm dataset:import -- \
+  --input path/to/replays \
+  --platform tenhou \
+  --out datasets/tenhou.jsonl
+
+# If start_game.id is absent:
+pnpm dataset:import -- \
+  --input one-game.jsonl \
+  --platform majsoul \
+  --game-id local-game-001 \
+  --out datasets/majsoul.jsonl
+
+pnpm dataset:validate -- --dataset datasets/tenhou.jsonl
+pnpm dataset:stats -- --dataset datasets/tenhou.jsonl --out results/tenhou-stats.json
+```
+
+Validation compares `legalActions` exactly with the rule-aware legal discard
+set returned by replaying the same MJAI prefix in RiichiEnv. This preserves
+restrictions such as kuikae that cannot be derived from the hand alone, then
+checks that the replayed state and observed action agree. Tenhou and Mahjong
+Soul inputs use their corresponding RiichiEnv rules (`tenhou` and `mjsoul`).
+
+`fixtures/mjai/seed-42.mjai.jsonl` is a small fixed-seed RiichiEnv fixture.
+Replay-derived data may be subject to the terms of the original platform and
+should not be redistributed without checking those terms.
 
 ## CLI
 
 ```text
---agents <list>       jev,gpt,random
+--agents <list>       jev,gpt,hybrid,mortal,random
 --dataset <path>      JSONL dataset
 --out <dir>           report directory
 --concurrency <n>     concurrent decisions per agent (default: 1)
 --seed <n>            deterministic random seed (default: 42)
+--hybrid-threshold <n> Jev confidence threshold for hybrid (default: 0.75)
+--paired-runs <n>     paired tournament seed blocks (exclusive with --games)
 ```
 
+Mortal is configured with a JSON file. `command` is an argv array (never a
+shell command), and `{seat}` is replaced with the numeric seat. `modelPath` is
+hashed at runtime; it is not copied into the report.
+
+```json
+{
+  "command": ["/path/to/mortal", "--seat", "{seat}"],
+  "version": "mortal-v4",
+  "modelPath": "/models/mortal.pth",
+  "config": {"temperature": 0}
+}
+```
+
+```bash
+pnpm reference:mortal -- \
+  --dataset datasets/tenhou.jsonl \
+  --out datasets/tenhou-mortal.jsonl \
+  --config mortal.json
+```
+
+Mortal subprocess execution is serialized (`concurrency=1`), reuses one
+process per game/seat, sends only the new MJAI suffix, and restarts/replays the
+prefix if observation order regresses. The bridge supplies a cumulative
+per-seat MJAI history. A wrapper should emit one JSON response for each
+response-triggering event; the adapter drains intermediate pass/call responses
+and uses the final discard response for the requested state. Illegal,
+malformed, crashed, or timed out responses are explicit errors.
+
 Each run writes `report.json` and `report.md`.
+
+## Full-game tournament
+
+The long-lived Python bridge exposes `startGame`, `step`, and `finish`. v1 is
+four-player only; Random, Jev, GPT, Hybrid, and Mortal agents can be mixed and seats
+can rotate between games. Complete-game Jev/GPT prompts receive each legal
+`{id,type,mjai}` action, so the model can select calls, riichi, wins, passes,
+and draws as well as discards.
+
+```bash
+pnpm tournament -- \
+  --seats jev,gpt,mortal,random \
+  --games 10 \
+  --mode 4p-red-half \
+  --rule tenhou \
+  --seed 42 \
+  --seat-policy rotate \
+  --mortal-config mortal.json \
+  --out results/tournament
+```
+
+The output is fixed to `tournament.json`, `games.jsonl`, `decisions.jsonl`,
+`tournament.md`, and `games/<gameId>.mjai.jsonl`. Agent failures use legal `none`/pass when
+available, otherwise the normalized MJAI action with the smallest stable JSON
+ordering; requested and applied actions remain separate in every decision
+record.
+
+For a paired benchmark, use `--paired-runs` instead of `--games`. Each base
+seed runs every unique circular seat rotation, so four distinct agents produce
+four games per pair block. Duplicate seat assignments are de-duplicated.
+
+```bash
+pnpm tournament -- \
+  --seats jev,gpt,mortal,random \
+  --paired-runs 25 \
+  --mode 4p-red-half \
+  --rule tenhou \
+  --seed 42 \
+  --seat-policy rotate \
+  --mortal-config mortal.json \
+  --out results/paired
+```
+
+`tournament.json` records the seed schedule, pair/rotation identifiers,
+dependency versions, model metadata, and a canonical configuration SHA-256.
+It also contains per-seat outcomes, Wilson rate intervals, pair-block score and
+rank intervals, and pairwise differences. `tournament.md` is the compact human
+comparison. Latency and token usage remain in the raw game and decision logs.
+
+### Jev confidence Hybrid
+
+Hybrid calls Jev first. A legal Jev action with confidence at or above the
+threshold is kept; missing, invalid, low-confidence, or illegal Jev output is
+escalated once to GPT. GPT is checked against the same closed legal-action set,
+and a legal Jev action is recorded as an explicit fallback if GPT fails.
+
+```bash
+pnpm bench -- \
+  --agents jev,gpt,hybrid \
+  --hybrid-threshold 0.75 \
+  --dataset datasets/tenhou-mortal.jsonl \
+  --out results/hybrid
+
+pnpm hybrid:sweep -- \
+  --dataset datasets/tenhou-mortal.jsonl \
+  --thresholds 0.50,0.65,0.75,0.85,0.95 \
+  --out results/hybrid-sweep
+```
+
+The sweep calls Jev and GPT exactly once per sample to produce same-sample
+baselines, then derives every threshold result from those cached responses.
+Threshold latency and token metrics count GPT only for decisions escalated by
+that threshold, while `usage` records the full sweep execution cost. It writes
+`hybrid-sweep.json`, `hybrid-sweep.md`, and raw per-sample `decisions.jsonl`.
 
 ## Fair-comparison rules
 
@@ -114,22 +260,29 @@ Each run writes `report.json` and `report.md`.
 ## Architecture
 
 ```text
-dataset.jsonl
-    |
+MJAI JSONL -> uv importer -> dataset.jsonl
+            |
     v
 Benchmark runner
     |
     +-- JevAgent ------> TypeSafe System One / Choice
     +-- GptAgent ------> OpenAI Responses API / Structured Outputs
+    +-- HybridAgent ---> Jev confidence gate -> GPT escalation
     +-- RandomAgent ---> deterministic offline baseline
+    +-- MortalAgent --> external MJAI JSONL subprocess
     |
     v
 records -> metrics -> report.json + report.md
+
+dataset.jsonl -> uv RiichiEnv bridge -> GameAgent tournament
+                              |
+                              v
+             tournament.json + decisions.jsonl + MJAI logs
 ```
 
 ## Roadmap
 
-### Phase 1 — discard benchmark
+### Implemented scope
 
 - [x] common agent contract
 - [x] Jev adapter
@@ -140,21 +293,17 @@ records -> metrics -> report.json + report.md
 - [x] ECE and Brier score
 - [x] JSON + Markdown reports
 - [x] tests and GitHub Actions
-- [ ] import real Tenhou/Majsoul states
-- [ ] add a Mortal reference adapter
+- [x] import MJAI replay states with red tiles, calls, riichi, provenance, and deterministic IDs
+- [x] Mortal reference adapter with model hashing and serialized subprocess execution
+- [x] pinned RiichiEnv JSONL bridge and four-player tournament output
+- [x] paired tournament schedules, outcome extraction, confidence intervals, and pairwise reports
+- [x] Jev-confidence Hybrid agent and threshold sweep
 
-### Phase 2 — full-game benchmark
+### Explicitly out of scope for v1
 
-Run paired games in a riichi environment such as RiichiEnv and measure average final score/rank, 1st/4th-place rate, win/deal-in rate, riichi/call rate, and time per decision/hanchan. Fix wall seeds where possible and rotate seats.
-
-### Phase 3 — Jev -> GPT escalation
-
-```text
-high Jev confidence -> play Jev decision
-low Jev confidence  -> send the same state to GPT
-```
-
-Compare strength, latency, and usage with Jev-only and GPT-only runs.
+- Tenhou XML or Mahjong Soul protobuf acquisition/conversion
+- three-player mahjong, distributed execution, training, and online play
+- Mortal weights, AGPL code, credentials, or automatic model downloads
 
 ## References
 

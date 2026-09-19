@@ -17,6 +17,78 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
       - run: pnpm install --no-frozen-lockfile
       - run: pnpm check
       - run: pnpm bench:sample
+      - run: pnpm dataset:import -- --input fixtures/mjai/seed-42.mjai.jsonl --platform tenhou --out /tmp/fixture-samples.jsonl
+      - run: pnpm dataset:validate -- --dataset /tmp/fixture-samples.jsonl
+      - run: pnpm dataset:import -- --input fixtures/mjai/mjsoul-seed-42-prefix.mjai.jsonl --platform majsoul --out /tmp/fixture-majsoul-samples.jsonl
+      - run: pnpm dataset:validate -- --dataset /tmp/fixture-majsoul-samples.jsonl
+      - run: pnpm dataset:import -- --input fixtures/mjai/mjsoul-rule-probe.mjai.jsonl --platform majsoul --out /tmp/fixture-majsoul-rule-probe.jsonl
+      - run: pnpm dataset:validate -- --dataset /tmp/fixture-majsoul-rule-probe.jsonl
+      - run: |
+          uv run --project . python - <<'PY'
+          from pathlib import Path
+          from riichienv import MjaiReplay, RiichiEnv
+          from jev_mahjong_bench.importer import (
+              parse_input_events,
+              replay_rule_name,
+              rule_for_platform,
+              rule_signature,
+          )
+
+          fixture = Path('fixtures/mjai/mjsoul-rule-probe.mjai.jsonl')
+          events = parse_input_events(fixture)
+          expected_forced_tedashi = {'tenhou': False, 'majsoul': True}
+          for platform, expected in expected_forced_tedashi.items():
+              replay = MjaiReplay.from_jsonl(str(fixture), rule=replay_rule_name(platform))
+              kyoku = next(replay.take_kyokus())
+              assert rule_signature(kyoku.rule) == rule_signature(rule_for_platform(platform))
+
+              env = RiichiEnv(game_mode='4p-red-half', rule=rule_for_platform(platform), seed=0)
+              for event in events[:2]:
+                  env.apply_event(event)
+              assert env.get_observation(0).forced_tedashi is expected
+
+          tenhou = rule_for_platform('tenhou')
+          majsoul = rule_for_platform('majsoul')
+          assert rule_signature(tenhou) != rule_signature(majsoul)
+          assert tenhou.sanchaho_is_draw is True
+          assert majsoul.sanchaho_is_draw is False
+          PY
+      - run: FAKE_MORTAL_DATASET=/tmp/fixture-samples.jsonl pnpm reference:mortal -- --dataset /tmp/fixture-samples.jsonl --out /tmp/fixture-mortal.jsonl --config tests/fixtures/fake-mortal-all.json
+      - run: pnpm dataset:validate -- --dataset /tmp/fixture-mortal.jsonl
+      - run: |
+          uv run --project . python - <<'PY'
+          import json
+          import tempfile
+          from pathlib import Path
+          from jev_mahjong_bench.validator import ImportErrorWithContext, validate
+
+          source = Path('/tmp/fixture-samples.jsonl')
+          rows = [json.loads(line) for line in source.read_text().splitlines() if line.strip()]
+          assert len(rows) == 82
+          assert sum(json.loads(row['state']['mjaiEvents'][-1]).get('type') in {'chi', 'pon'} for row in rows) == 12
+          derived = [json.loads(line) for line in Path('/tmp/fixture-mortal.jsonl').read_text().splitlines() if line.strip()]
+          assert all(row.get('referenceAction') for row in derived)
+
+          mutated = dict(rows[0])
+          legal = list(mutated['legalActions'])
+          extra = next(tile for tile in ('1m', '2m', '3m', '1z', '7z') if tile not in legal)
+          mutated['legalActions'] = [*legal, extra]
+          with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl') as handle:
+              handle.write(json.dumps(mutated) + '\n')
+              handle.flush()
+              try:
+                  validate(handle.name)
+              except ImportErrorWithContext:
+                  pass
+              else:
+                  raise AssertionError('validator accepted an extra illegal discard')
+          PY
+      - run: pnpm tournament -- --seats random,random,random,random --paired-runs 1 --mode 4p-red-east --rule tenhou --seed 42 --seat-policy rotate --out /tmp/tournament
+      - run: pnpm dataset:import -- --input /tmp/tournament/games --platform tenhou --game-id ci-tournament --out /tmp/tournament-samples.jsonl
+      - run: pnpm dataset:validate -- --dataset /tmp/tournament-samples.jsonl

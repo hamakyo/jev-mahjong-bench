@@ -18,6 +18,7 @@ async function decideOne(agent: MahjongAgent, sample: DecisionSample): Promise<D
       ...(d.probabilities ? { probabilities: d.probabilities } : {}),
       ...(typeof d.usage?.inputTokens === "number" ? { inputTokens: d.usage.inputTokens } : {}),
       ...(typeof d.usage?.outputTokens === "number" ? { outputTokens: d.usage.outputTokens } : {}),
+      ...(d.metadata ? { metadata: d.metadata } : {}),
     };
   } catch (error) {
     return {
