@@ -148,6 +148,8 @@ should not be redistributed without checking those terms.
 --seed <n>            deterministic random seed (default: 42)
 --hybrid-threshold <n> Jev confidence threshold for hybrid (default: 0.75)
 --paired-runs <n>     paired tournament seed blocks (exclusive with --games)
+--port <n>            watch server port; 0 selects an ephemeral port
+--exit-on-complete <bool> watch-only flag for CI smoke tests
 ```
 
 Mortal is configured with a JSON file. `command` is an argv array (never a
@@ -205,6 +207,30 @@ The output is fixed to `tournament.json`, `games.jsonl`, `decisions.jsonl`,
 available, otherwise the normalized MJAI action with the smallest stable JSON
 ordering; requested and applied actions remain separate in every decision
 record.
+
+### Live tournament dashboard
+
+`tournament:watch` adds a read-only observer path to the same tournament runner.
+It does not change agent inputs, game actions, or the normal tournament
+artifacts. The default bind address is loopback; `--port 0` is useful for tests.
+
+```bash
+pnpm tournament:watch -- \
+  --seats jev,gpt,mortal,hybrid \
+  --paired-runs 25 \
+  --mode 4p-red-half \
+  --rule tenhou \
+  --seed 42 \
+  --port 3000 \
+  --out results/live
+```
+
+Open the printed URL in a browser. The spectator stream removes concealed
+`start_kyoku.tehais` and `tsumo.pai` fields. `?mode=debug` exposes local-only
+diagnostics such as the current LLM state, legal actions, fallback information,
+and provider metadata; do not expose debug mode beyond a trusted machine. Use
+`--exit-on-complete true` for CI or smoke tests. The server uses only Node's
+standard `http` module and keeps a bounded SSE replay buffer for reconnects.
 
 ### LLM input and Mortal history
 
@@ -309,6 +335,13 @@ dataset.jsonl -> uv RiichiEnv bridge -> GameAgent tournament
              tournament.json + decisions.jsonl + MJAI logs
 ```
 
+Tournament watch adds a read-only path:
+
+```text
+RiichiEnvBridge -> TournamentObserver -> public projector -> Snapshot/SSE -> browser
+                                      \-> debug projector -> local debug view
+```
+
 ## Roadmap
 
 ### Implemented scope
@@ -327,6 +360,7 @@ dataset.jsonl -> uv RiichiEnv bridge -> GameAgent tournament
 - [x] pinned RiichiEnv JSONL bridge and four-player tournament output
 - [x] paired tournament schedules, outcome extraction, confidence intervals, and pairwise reports
 - [x] Jev-confidence Hybrid agent and threshold sweep
+- [x] read-only tournament observer, spectator/debug projector, snapshot store, SSE, and dashboard
 
 ### Explicitly out of scope for v1
 

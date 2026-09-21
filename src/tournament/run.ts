@@ -16,6 +16,7 @@ import { aggregateTournament, renderTournamentMarkdown, type TournamentMetrics }
 import { extractGameOutcomes } from "./outcomes.js";
 import { RiichiEnvBridge } from "../game/bridge.js";
 import { inspectGameDecisionInput, LlmInputContractError, type GameInputDiagnostics } from "../game/input.js";
+import type { LiveDecisionDiagnostics, TournamentEvent } from "../live/events.js";
 
 export interface TournamentOptions {
   seats: string[];
@@ -29,6 +30,14 @@ export interface TournamentOptions {
   timeoutMs: number;
   hybridThreshold?: number;
   mortalConfig?: MortalConfig;
+}
+
+export interface TournamentObserver {
+  emit(event: TournamentEvent): void;
+}
+
+export interface TournamentRuntime {
+  observer?: TournamentObserver;
 }
 
 export interface ScheduledTournamentGame {
@@ -136,6 +145,7 @@ export interface AgentCallResult {
   action: string;
   metadata: Record<string, unknown> | undefined;
   usage: { inputTokens?: number; outputTokens?: number } | undefined;
+  diagnostics?: LiveDecisionDiagnostics | undefined;
 }
 
 export interface AgentCall<T> {
@@ -166,9 +176,15 @@ export function serializedAgentAct(
     controller = new AbortController();
     agent.lastMetadata = undefined;
     agent.lastUsage = undefined;
+    agent.lastDiagnostics = undefined;
     return agent.act(observation, controller.signal).then((action) => {
       if (cancelled || controller?.signal.aborted) throw abortedError();
-      return { action, metadata: agent.lastMetadata, usage: agent.lastUsage };
+      return {
+        action,
+        metadata: agent.lastMetadata,
+        usage: agent.lastUsage,
+        ...(agent.lastDiagnostics ? { diagnostics: structuredClone(agent.lastDiagnostics) } : {}),
+      };
     });
   });
   const settled = current.then(() => undefined, () => undefined);
@@ -285,18 +301,30 @@ function isJevFallback(metadata: Record<string, unknown> | undefined): boolean {
   return hybridMetadata(metadata)?.finalSource === "jev-fallback";
 }
 
+function emitLive(observer: TournamentObserver | undefined, event: TournamentEvent): void {
+  if (!observer) return;
+  try {
+    // The observer is deliberately outside the tournament's mutation graph.
+    // Clone before crossing the boundary and isolate observer failures.
+    observer.emit(structuredClone(event));
+  } catch {
+    // Live monitoring must never stop or alter a benchmark run.
+  }
+}
+
 async function decide(
   observation: GameObservation,
   agent: GameAgentWithMetadata,
   timeoutMs: number,
   tails: AgentCallTails,
-): Promise<{ action: GameAction; record: GameDecisionRecord }> {
+): Promise<{ action: GameAction; record: GameDecisionRecord; diagnostics?: LiveDecisionDiagnostics }> {
   const started = performance.now();
   // A contract failure can happen before serializedAgentAct starts the
   // provider. Clear per-call diagnostics so a previous turn is never copied
   // into this failed decision record.
   agent.lastMetadata = undefined;
   agent.lastUsage = undefined;
+  agent.lastDiagnostics = undefined;
   let inputDiagnostics: GameInputDiagnostics = {
     decisionInputBytes: 0,
     stateBytes: 0,
@@ -305,6 +333,7 @@ async function decide(
   let requestedActionId: string | undefined;
   let callMetadata: Record<string, unknown> | undefined;
   let callUsage: { inputTokens?: number; outputTokens?: number } | undefined;
+  let callDiagnostics: LiveDecisionDiagnostics | undefined;
   let error: string | undefined;
   let fallbackReason: string | undefined;
   let inputContractError: unknown;
@@ -326,6 +355,7 @@ async function decide(
     requestedActionId = result.action;
     callMetadata = result.metadata;
     callUsage = result.usage;
+    callDiagnostics = result.diagnostics;
   } catch (reason) {
     if (reason instanceof Error && reason.name === "TimeoutError" && call) {
       await waitForCancelledCall(call);
@@ -336,6 +366,7 @@ async function decide(
       : error.includes("timeout") ? "timeout" : "agent-error";
     callMetadata = agent.lastMetadata;
     callUsage = agent.lastUsage;
+    callDiagnostics = agent.lastDiagnostics;
   }
   const requested = requestedActionId ? observation.legalActions.find((action) => action.id === requestedActionId) : undefined;
   if (!requested && !fallbackReason) fallbackReason = "illegal-action";
@@ -362,7 +393,11 @@ async function decide(
     ...(callMetadata ? { metadata: callMetadata } : {}),
     ...(error ? { error } : {}),
   };
-  return { action: applied, record };
+  return {
+    action: applied,
+    record,
+    ...(callDiagnostics ? { diagnostics: callDiagnostics } : {}),
+  };
 }
 
 function playerResult(
@@ -419,6 +454,8 @@ function playerResult(
 async function runGame(
   options: TournamentOptions,
   game: ScheduledTournamentGame,
+  observer: TournamentObserver | undefined,
+  totalGames: number,
 ): Promise<{ result: TournamentGameResult; records: GameDecisionRecord[]; events: unknown[] }> {
   const bridge = new RiichiEnvBridge();
   const agents: GameAgentWithMetadata[] = [];
@@ -433,7 +470,31 @@ async function runGame(
         ...(options.hybridThreshold !== undefined ? { hybridThreshold: options.hybridThreshold } : {}),
       }));
     }
-    ({ observations, done } = await bridge.startGame({ gameId: game.gameId, mode: options.mode, rule: options.rule, seed: game.seed }));
+    const started = await bridge.startGame({ gameId: game.gameId, mode: options.mode, rule: options.rule, seed: game.seed });
+    ({ observations, done } = started);
+    emitLive(observer, {
+      schemaVersion: 1,
+      type: "game:start",
+      gameId: game.gameId,
+      pairId: game.pairId,
+      rotationIndex: game.rotationIndex,
+      seed: game.seed,
+      baseSeed: game.baseSeed,
+      seats: [...game.seats],
+      gameIndex: game.index,
+      totalGames,
+    });
+    for (const event of started.events) {
+      emitLive(observer, {
+        schemaVersion: 1,
+        type: "mjai",
+        gameId: game.gameId,
+        pairId: game.pairId,
+        rotationIndex: game.rotationIndex,
+        source: "bridge",
+        event,
+      });
+    }
     let guard = 0;
     while (!done) {
       if (++guard > 20_000) throw new Error("RiichiEnv game exceeded the safety turn limit");
@@ -445,13 +506,66 @@ async function runGame(
           .map(async (observation) => {
             const agent = agents[observation.player];
             if (!agent) throw new Error(`No agent for player ${observation.player}`);
-            return decide(observation, agent, options.timeoutMs, agentCallTails);
+            emitLive(observer, {
+              schemaVersion: 1,
+              type: "decision:start",
+              gameId: game.gameId,
+              pairId: game.pairId,
+              rotationIndex: game.rotationIndex,
+              handIndex: observation.handIndex,
+              turnIndex: observation.turnIndex,
+              player: observation.player,
+              agentId: agent.id,
+              observation: {
+                state: observation.state,
+                legalActions: observation.legalActions,
+                newEvents: observation.newEvents,
+              },
+            });
+            const decision = await decide(observation, agent, options.timeoutMs, agentCallTails);
+            emitLive(observer, {
+              schemaVersion: 1,
+              type: "decision:end",
+              gameId: game.gameId,
+              pairId: game.pairId,
+              rotationIndex: game.rotationIndex,
+              handIndex: observation.handIndex,
+              turnIndex: observation.turnIndex,
+              player: observation.player,
+              agentId: agent.id,
+              ...(decision.record.requestedActionId ? { requestedActionId: decision.record.requestedActionId } : {}),
+              appliedActionId: decision.record.appliedActionId,
+              ...(decision.record.requestedAction ? { requestedAction: decision.record.requestedAction } : {}),
+              appliedAction: decision.record.appliedAction,
+              isLegal: decision.record.isLegal,
+              ...(decision.record.fallbackReason ? { fallbackReason: decision.record.fallbackReason } : {}),
+              latencyMs: decision.record.latencyMs,
+              ...(decision.record.inputTokens !== undefined ? { inputTokens: decision.record.inputTokens } : {}),
+              ...(decision.record.outputTokens !== undefined ? { outputTokens: decision.record.outputTokens } : {}),
+              retryCount: decision.record.retryCount,
+              ...(decision.record.error ? { error: decision.record.error } : {}),
+              ...(decision.diagnostics ? { diagnostics: decision.diagnostics } : {}),
+              ...(decision.record.metadata ? { metadata: decision.record.metadata } : {}),
+            });
+            return decision;
           }),
       );
       decisions.sort((left, right) => left.record.player - right.record.player);
       for (const decision of decisions) records.push(decision.record);
       const actions = new Map(decisions.map((decision) => [decision.record.player, decision.action]));
-      ({ observations, done } = await bridge.step(actions));
+      const stepped = await bridge.step(actions);
+      ({ observations, done } = stepped);
+      for (const event of stepped.events) {
+        emitLive(observer, {
+          schemaVersion: 1,
+          type: "mjai",
+          gameId: game.gameId,
+          pairId: game.pairId,
+          rotationIndex: game.rotationIndex,
+          source: "bridge",
+          event,
+        });
+      }
     }
     const final = await bridge.finish();
     const outcomes = extractGameOutcomes(final.events);
@@ -478,6 +592,21 @@ async function runGame(
       players,
       errorCount: records.filter((record) => Boolean(record.error)).length,
     };
+    emitLive(observer, {
+      schemaVersion: 1,
+      type: "game:end",
+      gameId: game.gameId,
+      pairId: game.pairId,
+      rotationIndex: game.rotationIndex,
+      seed: game.seed,
+      baseSeed: game.baseSeed,
+      seats: [...game.seats],
+      scores: [...result.scores],
+      ranks: [...result.ranks],
+      handCount: result.handCount,
+      errorCount: result.errorCount,
+      result,
+    });
     return { result, records, events: final.events };
   } finally {
     await Promise.all(agents.map((agent) => agent.close?.()));
@@ -524,62 +653,117 @@ function modelMetadata(options: TournamentOptions, mortalPolicy: Record<string, 
   };
 }
 
-export async function runTournament(options: TournamentOptions): Promise<void> {
+export async function runTournament(options: TournamentOptions, runtime: TournamentRuntime = {}): Promise<void> {
   validateOptions(options);
   const schedule = buildTournamentSchedule(options);
+  const observer = runtime.observer;
+  const totalGames = schedule.length;
+  emitLive(observer, {
+    schemaVersion: 1,
+    type: "tournament:start",
+    totalGames,
+    settings: {
+      mode: options.mode,
+      rule: options.rule,
+      seed: options.seed,
+      seatPolicy: options.pairedRuns !== undefined ? "rotate" : options.seatPolicy,
+      requestedSeats: [...options.seats],
+      timeoutMs: options.timeoutMs,
+      pairedRuns: options.pairedRuns ?? null,
+    },
+    schedule: schedule.map(({ index, gameId, seed, baseSeed, pairId, rotationIndex, seats }) => ({
+      index,
+      gameId,
+      seed,
+      baseSeed,
+      pairId,
+      rotationIndex,
+      seats: [...seats],
+    })),
+  });
   const output = resolve(options.out);
-  await mkdir(join(output, "games"), { recursive: true });
-  const allResults: TournamentGameResult[] = [];
-  const allRecords: GameDecisionRecord[] = [];
-  for (const game of schedule) {
-    const finished = await runGame(options, game);
-    allResults.push(finished.result);
-    allRecords.push(...finished.records);
-    const eventLines = finished.events.map((event) => JSON.stringify(event)).join("\n") + "\n";
-    await writeFile(join(output, "games", `${finished.result.gameId}.mjai.jsonl`), eventLines);
-    console.log(`Finished game ${game.index + 1}/${schedule.length}: ${finished.result.gameId}`);
-  }
+  let completedGames = 0;
+  try {
+    await mkdir(join(output, "games"), { recursive: true });
+    const allResults: TournamentGameResult[] = [];
+    const allRecords: GameDecisionRecord[] = [];
+    for (const game of schedule) {
+      const finished = await runGame(options, game, observer, totalGames);
+      allResults.push(finished.result);
+      allRecords.push(...finished.records);
+      const eventLines = finished.events.map((event) => JSON.stringify(event)).join("\n") + "\n";
+      await writeFile(join(output, "games", `${finished.result.gameId}.mjai.jsonl`), eventLines);
+      completedGames += 1;
+      emitLive(observer, {
+        schemaVersion: 1,
+        type: "tournament:progress",
+        completedGames,
+        totalGames,
+        gameId: game.gameId,
+        pairId: game.pairId,
+        rotationIndex: game.rotationIndex,
+      });
+      console.log(`Finished game ${game.index + 1}/${schedule.length}: ${finished.result.gameId}`);
+    }
 
-  const metrics: TournamentMetrics = aggregateTournament(allResults, allRecords);
-  const mortalPolicy = options.mortalConfig
-    ? await mortalReferencePolicy(options.mortalConfig) as unknown as Record<string, unknown>
-    : undefined;
-  const hybridThreshold = effectiveHybridThreshold(options);
-  const settings = {
-    schedule: options.pairedRuns !== undefined ? "paired" : "games",
-    games: schedule.length,
-    pairedRuns: options.pairedRuns ?? null,
-    mode: options.mode,
-    rule: options.rule,
-    seed: options.seed,
-    seatPolicy: options.pairedRuns !== undefined ? "rotate" : options.seatPolicy,
-    timeoutMs: options.timeoutMs,
-    requestedSeats: options.seats,
-    ...(hybridThreshold !== undefined ? { hybridThreshold } : {}),
-  };
-  const dependencies = { riichienv: "0.4.10", node: process.version };
-  const models = modelMetadata(options, mortalPolicy);
-  const seedSchedule = schedule.map(({ index, gameId: id, seed, baseSeed, pairId, rotationIndex, seats }) => ({
-    index,
-    gameId: id,
-    seed,
-    baseSeed,
-    pairId,
-    rotationIndex,
-    seats,
-  }));
-  const benchmarkConfig = { settings, dependencies, models, seedSchedule };
-  const configSha256 = sha256(canonicalJson(benchmarkConfig));
-  const summary = {
-    version: 2,
-    ...benchmarkConfig,
-    configSha256,
-    games: allResults,
-    metrics,
-    errorCount: allResults.reduce((sum, game) => sum + game.errorCount, 0),
-  };
-  await writeFile(join(output, "tournament.json"), `${JSON.stringify(summary, null, 2)}\n`);
-  await writeFile(join(output, "games.jsonl"), allResults.map((result) => JSON.stringify(result)).join("\n") + "\n");
-  await writeFile(join(output, "decisions.jsonl"), allRecords.map((record) => JSON.stringify(record)).join("\n") + "\n");
-  await writeFile(join(output, "tournament.md"), `${renderTournamentMarkdown(metrics)}\n\n## Reproduction\n\nConfiguration SHA-256: \`${configSha256}\`\n`);
+    const metrics: TournamentMetrics = aggregateTournament(allResults, allRecords);
+    const mortalPolicy = options.mortalConfig
+      ? await mortalReferencePolicy(options.mortalConfig) as unknown as Record<string, unknown>
+      : undefined;
+    const hybridThreshold = effectiveHybridThreshold(options);
+    const settings = {
+      schedule: options.pairedRuns !== undefined ? "paired" : "games",
+      games: schedule.length,
+      pairedRuns: options.pairedRuns ?? null,
+      mode: options.mode,
+      rule: options.rule,
+      seed: options.seed,
+      seatPolicy: options.pairedRuns !== undefined ? "rotate" : options.seatPolicy,
+      timeoutMs: options.timeoutMs,
+      requestedSeats: options.seats,
+      ...(hybridThreshold !== undefined ? { hybridThreshold } : {}),
+    };
+    const dependencies = { riichienv: "0.4.10", node: process.version };
+    const models = modelMetadata(options, mortalPolicy);
+    const seedSchedule = schedule.map(({ index, gameId: id, seed, baseSeed, pairId, rotationIndex, seats }) => ({
+      index,
+      gameId: id,
+      seed,
+      baseSeed,
+      pairId,
+      rotationIndex,
+      seats,
+    }));
+    const benchmarkConfig = { settings, dependencies, models, seedSchedule };
+    const configSha256 = sha256(canonicalJson(benchmarkConfig));
+    const summary = {
+      version: 2,
+      ...benchmarkConfig,
+      configSha256,
+      games: allResults,
+      metrics,
+      errorCount: allResults.reduce((sum, game) => sum + game.errorCount, 0),
+    };
+    await writeFile(join(output, "tournament.json"), `${JSON.stringify(summary, null, 2)}\n`);
+    await writeFile(join(output, "games.jsonl"), allResults.map((result) => JSON.stringify(result)).join("\n") + "\n");
+    await writeFile(join(output, "decisions.jsonl"), allRecords.map((record) => JSON.stringify(record)).join("\n") + "\n");
+    await writeFile(join(output, "tournament.md"), `${renderTournamentMarkdown(metrics)}\n\n## Reproduction\n\nConfiguration SHA-256: \`${configSha256}\`\n`);
+    emitLive(observer, {
+      schemaVersion: 1,
+      type: "tournament:end",
+      completedGames,
+      totalGames,
+      errorCount: summary.errorCount,
+    });
+  } catch (error) {
+    emitLive(observer, {
+      schemaVersion: 1,
+      type: "tournament:error",
+      message: error instanceof Error ? error.message : String(error),
+      ...(error instanceof Error ? { errorName: error.name } : {}),
+      completedGames,
+      totalGames,
+    });
+    throw error;
+  }
 }

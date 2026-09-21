@@ -41,6 +41,16 @@ describe("Hybrid decision", () => {
     expect(result.metadata).toMatchObject({ hybrid: { escalated: false, finalSource: "jev", finalAction: "a" } });
   });
 
+  it("exposes provider probabilities through the live trace only", async () => {
+    let trace: unknown;
+    const result = await runHybridDecision(sample, sample.legalActions, 0.75, {
+      jev: async () => ({ ...decision("a", 0.9), probabilities: { a: 0.9, b: 0.1 } }),
+      gpt: async () => decision("b"),
+    }, undefined, (value) => { trace = value; });
+    expect(trace).toMatchObject({ jev: { probabilities: { a: 0.9, b: 0.1 } }, finalSource: "jev" });
+    expect(result.metadata?.hybrid).not.toHaveProperty("jev.probabilities");
+  });
+
   it("escalates low, missing, non-finite, and illegal Jev decisions", async () => {
     for (const jev of [
       decision("a", 0.74),

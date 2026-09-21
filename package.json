@@ -15,6 +15,7 @@
     "dataset:stats": "tsx src/cli.ts dataset:stats",
     "reference:mortal": "tsx src/cli.ts reference:mortal",
     "tournament": "tsx src/cli.ts tournament",
+    "tournament:watch": "tsx src/cli.ts tournament:watch",
     "hybrid:sweep": "tsx src/cli.ts hybrid:sweep",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",

@@ -19,6 +19,22 @@ export interface HybridProviderRecord {
   error?: string;
 }
 
+export type HybridTraceProviderRecord = HybridProviderRecord & {
+  probabilities?: Record<string, number>;
+};
+
+export interface HybridTrace {
+  threshold: number;
+  jev: HybridTraceProviderRecord;
+  gpt?: HybridTraceProviderRecord;
+  escalated: boolean;
+  escalationReason?: string;
+  finalSource?: HybridMetadata["finalSource"];
+  finalAction?: string;
+}
+
+export type HybridTraceCallback = (trace: HybridTrace) => void;
+
 export interface HybridMetadata {
   threshold: number;
   jev: HybridProviderRecord;
@@ -118,6 +134,18 @@ function publicConfidence(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function emitTrace(callback: HybridTraceCallback | undefined, trace: HybridTrace): void {
+  if (!callback) return;
+  try { callback(trace); } catch { /* diagnostics cannot change the decision */ }
+}
+
+function traceRecord(record: HybridProviderRecord, decision: AgentDecision | undefined): HybridTraceProviderRecord {
+  return {
+    ...record,
+    ...(decision?.probabilities ? { probabilities: { ...decision.probabilities } } : {}),
+  };
+}
+
 /** Run one Jev/GPT decision and return provider-neutral Hybrid metadata. */
 export async function runHybridDecision<T>(
   input: T,
@@ -125,6 +153,7 @@ export async function runHybridDecision<T>(
   threshold: number,
   calls: HybridProviderCalls<T>,
   signal?: AbortSignal,
+  trace?: HybridTraceCallback,
 ): Promise<AgentDecision> {
   validateHybridThreshold(threshold);
   if (signal?.aborted) throw new Error("agent call aborted");
@@ -152,6 +181,13 @@ export async function runHybridDecision<T>(
   else if (!confidenceValid) escalationReason = "invalid-confidence";
   else if (confidence < threshold) escalationReason = "below-threshold";
 
+  emitTrace(trace, {
+    threshold,
+    jev: traceRecord(jevRecord, jevDecision),
+    escalated: Boolean(escalationReason),
+    ...(escalationReason ? { escalationReason } : {}),
+  });
+
   if (!escalationReason && jevDecision) {
     const finalConfidence = publicConfidence(jevDecision.confidence);
     const metadata: HybridMetadata = {
@@ -161,6 +197,13 @@ export async function runHybridDecision<T>(
       finalSource: "jev",
       finalAction: jevDecision.action,
     };
+    emitTrace(trace, {
+      threshold,
+      jev: traceRecord(jevRecord, jevDecision),
+      escalated: false,
+      finalSource: "jev",
+      finalAction: jevDecision.action,
+    });
     return {
       action: jevDecision.action,
       ...(jevDecision.probabilities ? { probabilities: jevDecision.probabilities } : {}),
@@ -170,7 +213,20 @@ export async function runHybridDecision<T>(
     };
   }
 
-  if (signal?.aborted) throw new Error("agent call aborted");
+  if (signal?.aborted) {
+    const gptRecord = providerRecord(undefined, 0, "agent call aborted");
+    emitTrace(trace, {
+      threshold,
+      jev: traceRecord(jevRecord, jevDecision),
+      escalated: true,
+      ...(escalationReason ? { escalationReason } : {}),
+      gpt: gptRecord,
+      finalSource: "error",
+    });
+    const aborted = hybridFailure("agent call aborted", threshold, jevRecord, gptRecord, escalationReason);
+    aborted.name = "AbortError";
+    throw aborted;
+  }
   const gptStarted = performance.now();
   let gptDecision: AgentDecision | undefined;
   let gptError: string | undefined;
@@ -182,6 +238,13 @@ export async function runHybridDecision<T>(
     gptFailureMetadata = errorMetadata(error);
   }
   const gptRecord = providerRecord(gptDecision, performance.now() - gptStarted, gptError, gptFailureMetadata);
+  emitTrace(trace, {
+    threshold,
+    jev: traceRecord(jevRecord, jevDecision),
+    escalated: true,
+    ...(escalationReason ? { escalationReason } : {}),
+    gpt: traceRecord(gptRecord, gptDecision),
+  });
   if (signal?.aborted) {
     const aborted = hybridFailure("agent call aborted", threshold, jevRecord, gptRecord, escalationReason);
     aborted.name = "AbortError";
@@ -199,6 +262,15 @@ export async function runHybridDecision<T>(
       finalSource: "gpt",
       finalAction: gptDecision.action,
     };
+    emitTrace(trace, {
+      threshold,
+      jev: traceRecord(jevRecord, jevDecision),
+      escalated: true,
+      ...(escalationReason ? { escalationReason } : {}),
+      gpt: traceRecord(gptRecord, gptDecision),
+      finalSource: "gpt",
+      finalAction: gptDecision.action,
+    });
     return {
       action: gptDecision.action,
       ...(gptDecision.probabilities ? { probabilities: gptDecision.probabilities } : {}),
@@ -220,6 +292,15 @@ export async function runHybridDecision<T>(
       finalSource: "jev-fallback",
       finalAction: jevDecision.action,
     };
+    emitTrace(trace, {
+      threshold,
+      jev: traceRecord(jevRecord, jevDecision),
+      escalated: true,
+      ...(escalationReason ? { escalationReason } : {}),
+      gpt: { ...traceRecord(gptRecord, gptDecision), error: fallbackError },
+      finalSource: "jev-fallback",
+      finalAction: jevDecision.action,
+    });
     return {
       action: jevDecision.action,
       ...(jevDecision.probabilities ? { probabilities: jevDecision.probabilities } : {}),
@@ -230,6 +311,14 @@ export async function runHybridDecision<T>(
   }
 
   const failure = gptError ?? "GPT returned an illegal action";
+  emitTrace(trace, {
+    threshold,
+    jev: traceRecord(jevRecord, jevDecision),
+    escalated: true,
+    ...(escalationReason ? { escalationReason } : {}),
+    gpt: traceRecord(gptRecord, gptDecision),
+    finalSource: "error",
+  });
   throw hybridFailure(`Hybrid decision failed: ${failure}`, threshold, jevRecord, gptRecord, escalationReason);
 }
 
@@ -268,10 +357,11 @@ export function hybridGameDecision(
   threshold: number,
   providers: HybridGameProviders,
   signal?: AbortSignal,
+  trace?: HybridTraceCallback,
 ): Promise<AgentDecision> {
   inspectGameDecisionInput(input);
   return runHybridDecision(input, input.legalActions.map((action) => action.id), threshold, {
     jev: (value, providerSignal) => providers.jev.decide(value, providerSignal),
     gpt: (value, providerSignal) => providers.gpt.decide(value, providerSignal),
-  }, signal);
+  }, signal, trace);
 }

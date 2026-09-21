@@ -1,16 +1,19 @@
 import { createInterface } from "node:readline";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { GameAction, GameAgent, GameDecisionInput, GameObservation } from "../types.js";
+import type { LiveDecisionDiagnostics } from "../live/events.js";
 import { canonicalJson, mjaiToMpsz } from "../mjai/tiles.js";
 import { inspectGameDecisionInput } from "../game/input.js";
 import { GptAgent, GptRequestError } from "./gpt.js";
-import { hybridGameDecision, validateHybridThreshold } from "./hybrid.js";
+import { hybridGameDecision, validateHybridThreshold, type HybridTrace } from "./hybrid.js";
 import { JevAgent } from "./jev.js";
 import { eventNeedsResponse, responseActor, type MortalConfig, mortalReferencePolicy } from "./mortal.js";
 
 export interface GameAgentWithMetadata extends GameAgent {
   lastMetadata: Record<string, unknown> | undefined;
   lastUsage: { inputTokens?: number; outputTokens?: number } | undefined;
+  /** Live-only diagnostics; never copied into GameDecisionRecord automatically. */
+  lastDiagnostics?: LiveDecisionDiagnostics | undefined;
 }
 
 export interface GameAgentFactoryOptions {
@@ -34,6 +37,66 @@ function metadataFromError(error: unknown): Record<string, unknown> | undefined 
     : undefined;
 }
 
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function objectValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function diagnosticsForDecision(
+  decision: { confidence?: number; probabilities?: Record<string, number>; metadata?: Record<string, unknown> },
+): LiveDecisionDiagnostics {
+  const confidence = numberValue(decision.confidence);
+  return {
+    ...(confidence !== undefined ? { confidence } : {}),
+    ...(decision.probabilities ? { probabilities: { ...decision.probabilities } } : {}),
+    ...(decision.metadata ? { providerMetadata: structuredClone(decision.metadata) } : {}),
+  };
+}
+
+function hybridDiagnostics(metadata: Record<string, unknown> | undefined, decision?: {
+  confidence?: number;
+  probabilities?: Record<string, number>;
+}): LiveDecisionDiagnostics | undefined {
+  const hybrid = objectValue(metadata?.hybrid);
+  if (!hybrid) return undefined;
+  const trace: LiveDecisionDiagnostics["hybridTrace"] = {
+    threshold: numberValue(hybrid.threshold) ?? 0,
+    escalated: hybrid.escalated === true,
+    ...(typeof hybrid.escalationReason === "string" ? { escalationReason: hybrid.escalationReason } : {}),
+    finalSource: typeof hybrid.finalSource === "string" ? hybrid.finalSource : "unknown",
+  };
+  const confidence = numberValue(decision?.confidence);
+  return {
+    ...(confidence !== undefined ? { confidence } : {}),
+    ...(decision?.probabilities ? { probabilities: { ...decision.probabilities } } : {}),
+    providerMetadata: { hybrid: structuredClone(hybrid) },
+    hybridTrace: trace,
+  };
+}
+
+function diagnosticsForHybridTrace(trace: HybridTrace): LiveDecisionDiagnostics {
+  const final = trace.finalSource === "gpt" ? trace.gpt : trace.jev;
+  return {
+    ...(final?.confidence !== null && final?.confidence !== undefined ? { confidence: final.confidence } : {}),
+    ...(final?.probabilities ? { probabilities: { ...final.probabilities } } : {}),
+    providerMetadata: {
+      jev: structuredClone(trace.jev),
+      ...(trace.gpt ? { gpt: structuredClone(trace.gpt) } : {}),
+    },
+    hybridTrace: {
+      threshold: trace.threshold,
+      escalated: trace.escalated,
+      ...(trace.escalationReason ? { escalationReason: trace.escalationReason } : {}),
+      finalSource: trace.finalSource ?? "pending",
+    },
+  };
+}
+
 function hash32(input: string): number {
   let hash = 0x811c9dc5;
   for (let i = 0; i < input.length; i += 1) {
@@ -47,6 +110,7 @@ export class RandomGameAgent implements GameAgentWithMetadata {
   readonly id = "random";
   lastMetadata: Record<string, unknown> | undefined;
   lastUsage: { inputTokens?: number; outputTokens?: number } | undefined;
+  lastDiagnostics: LiveDecisionDiagnostics | undefined;
   constructor(private readonly seed: number) {}
 
   async act(observation: GameObservation, signal?: AbortSignal): Promise<string> {
@@ -55,6 +119,7 @@ export class RandomGameAgent implements GameAgentWithMetadata {
     const action = observation.legalActions[index];
     if (!action) throw new Error("No legal game action available");
     this.lastMetadata = { seed: this.seed };
+    this.lastDiagnostics = { providerMetadata: { seed: this.seed } };
     return action.id;
   }
 }
@@ -75,6 +140,7 @@ export class JevGameAgent implements GameAgentWithMetadata {
   private generation = 0;
   lastMetadata: Record<string, unknown> | undefined;
   lastUsage: { inputTokens?: number; outputTokens?: number } | undefined;
+  lastDiagnostics: LiveDecisionDiagnostics | undefined;
 
   async act(observation: GameObservation, signal?: AbortSignal): Promise<string> {
     throwIfAborted(signal);
@@ -88,6 +154,7 @@ export class JevGameAgent implements GameAgentWithMetadata {
     }
     this.lastMetadata = { provider: "typesafe", ...(decision.metadata ?? {}) };
     this.lastUsage = decision.usage;
+    this.lastDiagnostics = diagnosticsForDecision(decision);
     return decision.action;
   }
 
@@ -102,6 +169,7 @@ export class GptGameAgent implements GameAgentWithMetadata {
   private readonly controllers = new Set<AbortController>();
   lastMetadata: Record<string, unknown> | undefined;
   lastUsage: { inputTokens?: number; outputTokens?: number } | undefined;
+  lastDiagnostics: LiveDecisionDiagnostics | undefined;
 
   constructor() { this.id = this.agent.id; }
 
@@ -117,10 +185,12 @@ export class GptGameAgent implements GameAgentWithMetadata {
       throwIfAborted(controller.signal);
       this.lastMetadata = decision.metadata;
       this.lastUsage = decision.usage;
+      this.lastDiagnostics = diagnosticsForDecision(decision);
       return decision.action;
     } catch (error) {
       if (error instanceof GptRequestError) this.lastMetadata = { ...error.metadata };
       else this.lastMetadata = metadataFromError(error);
+      if (this.lastMetadata) this.lastDiagnostics = { providerMetadata: structuredClone(this.lastMetadata) };
       throw error;
     } finally {
       signal?.removeEventListener("abort", abort);
@@ -144,6 +214,7 @@ export class HybridGameAgent implements GameAgentWithMetadata {
   private generation = 0;
   lastMetadata: Record<string, unknown> | undefined;
   lastUsage: { inputTokens?: number; outputTokens?: number } | undefined;
+  lastDiagnostics: LiveDecisionDiagnostics | undefined;
 
   constructor(threshold = 0.75) {
     this.threshold = validateHybridThreshold(threshold);
@@ -159,10 +230,14 @@ export class HybridGameAgent implements GameAgentWithMetadata {
     this.controllers.add(controller);
     try {
       const input = gameDecisionInput(observation);
+      let traceDiagnostics: LiveDecisionDiagnostics | undefined;
       const decision = await hybridGameDecision(input, this.threshold, {
         jev: { decide: (value, providerSignal) => this.jev.decideGame(value, providerSignal) },
         gpt: { decide: (value, providerSignal) => this.gpt.decideGame(value, providerSignal) },
-      }, controller.signal);
+      }, controller.signal, (trace) => {
+        traceDiagnostics = diagnosticsForHybridTrace(trace);
+        this.lastDiagnostics = traceDiagnostics;
+      });
       throwIfAborted(signal);
       throwIfAborted(controller.signal);
       if (generation !== this.generation) {
@@ -172,9 +247,27 @@ export class HybridGameAgent implements GameAgentWithMetadata {
       }
       this.lastMetadata = decision.metadata;
       this.lastUsage = decision.usage;
+      const metadataDiagnostics = hybridDiagnostics(decision.metadata, decision);
+      this.lastDiagnostics = metadataDiagnostics && traceDiagnostics
+        ? {
+          ...traceDiagnostics,
+          ...metadataDiagnostics,
+          ...(traceDiagnostics.providerMetadata ? { providerMetadata: traceDiagnostics.providerMetadata } : {}),
+        }
+        : metadataDiagnostics ?? traceDiagnostics ?? diagnosticsForDecision(decision);
       return decision.action;
     } catch (error) {
       this.lastMetadata = metadataFromError(error);
+      const metadataDiagnostics = hybridDiagnostics(this.lastMetadata);
+      if (metadataDiagnostics) {
+        this.lastDiagnostics = this.lastDiagnostics
+          ? {
+            ...this.lastDiagnostics,
+            ...metadataDiagnostics,
+            ...(this.lastDiagnostics.providerMetadata ? { providerMetadata: this.lastDiagnostics.providerMetadata } : {}),
+          }
+          : metadataDiagnostics;
+      }
       throw error;
     } finally {
       signal?.removeEventListener("abort", abort);
@@ -409,6 +502,7 @@ export class MortalGameAgent implements GameAgentWithMetadata {
   private readonly policy: Promise<Record<string, unknown>>;
   lastMetadata: Record<string, unknown> | undefined;
   lastUsage: { inputTokens?: number; outputTokens?: number } | undefined;
+  lastDiagnostics: LiveDecisionDiagnostics | undefined;
 
   constructor(config: MortalConfig) {
     this.session = new MortalGameSession(config);
@@ -420,6 +514,7 @@ export class MortalGameAgent implements GameAgentWithMetadata {
     const action = await this.session.act(observation, signal);
     throwIfAborted(signal);
     this.lastMetadata = await this.policy;
+    this.lastDiagnostics = { providerMetadata: structuredClone(this.lastMetadata) };
     return action;
   }
 

@@ -161,6 +161,33 @@ pnpm tournament -- \
 情報、canonical設定SHA-256、エージェント別成績、Wilson区間、score/rankの
 Student-t区間、ペア差分を保存します。
 
+### ライブ対局ダッシュボード
+
+`tournament:watch`は、既存の対局実行へ読み取り専用の監視経路を追加します。
+agent入力、適用操作、通常の対局成果物は変更しません。既定のlisten先は
+loopbackで、`--port 0`はテスト用の一時ポートです。
+
+```bash
+pnpm tournament:watch -- \
+  --seats jev,gpt,mortal,hybrid \
+  --paired-runs 25 \
+  --mode 4p-red-half \
+  --rule tenhou \
+  --seed 42 \
+  --port 3000 \
+  --out results/live
+```
+
+表示されたURLをブラウザで開きます。Spectator用ストリームでは
+`start_kyoku.tehais`と`tsumo.pai`を除去します。`?mode=debug`では現在のLLM
+state、合法手、fallback、provider metadataなどの診断情報をローカル専用で
+表示します。debugモードを信頼できないネットワークへ公開しないでください。
+CIやsmoke testでは`--exit-on-complete true`を指定できます。サーバーはNode標準
+の`http`だけを使い、SSE再接続用にイベントを有限件数保持します。
+
+watchの`--port 0`は空いているポートを自動割り当てします。通常のwatchは対局
+終了後も最終snapshotを提供し、CIでは`--exit-on-complete true`で終了させます。
+
 ### LLM入力とMortal履歴
 
 完全対局のObservationでは、LLM入力とMortal履歴を分離しています。`state`は
@@ -218,6 +245,13 @@ MJAI JSONL -> uv importer -> DecisionSample JSONL
                          +-> Jev / GPT / Mortal / Hybrid benchmark
                          +-> RiichiEnv bridge -> four-player tournament
                          +-> JSON / Markdown / MJAI reports
+```
+
+対局watchの読み取り専用経路:
+
+```text
+RiichiEnvBridge -> TournamentObserver -> 公開projector -> Snapshot/SSE -> ブラウザ
+                                      \-> debug projector -> ローカル診断画面
 ```
 
 ## ライセンス

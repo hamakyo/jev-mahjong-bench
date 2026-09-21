@@ -14,6 +14,9 @@ import { summarize } from "./benchmark/metrics.js";
 import { writeReport, type ReferencePolicyCount } from "./benchmark/report.js";
 import { runAgent } from "./benchmark/run.js";
 import { runTournament, type TournamentOptions } from "./tournament/run.js";
+import { LiveEventHub } from "./live/hub.js";
+import { SnapshotStore } from "./live/snapshot.js";
+import { createLiveServer } from "./live/server.js";
 import type { DecisionRecord } from "./types.js";
 
 interface Flags { [key: string]: string; }
@@ -199,6 +202,10 @@ async function runHybridSweep(argv: string[]): Promise<void> {
 
 async function runTournamentCommand(argv: string[]): Promise<void> {
   const flags = parseFlags(argv);
+  await runTournament(await tournamentOptionsFromFlags(flags));
+}
+
+async function tournamentOptionsFromFlags(flags: Flags): Promise<TournamentOptions> {
   const seats = required(flags, "seats").split(",").map((value) => value.trim()).filter(Boolean);
   const mortalConfig = flags["mortal-config"] ? await loadMortalConfig(resolve(flags["mortal-config"]!)) : undefined;
   const hasGames = flags.games !== undefined;
@@ -222,7 +229,55 @@ async function runTournamentCommand(argv: string[]): Promise<void> {
     hybridThreshold,
     ...(mortalConfig ? { mortalConfig } : {}),
   };
-  await runTournament(options);
+  return options;
+}
+
+function booleanFlag(flags: Flags, name: string, fallback: boolean): boolean {
+  const value = flags[name];
+  if (value === undefined) return fallback;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  throw new Error(`--${name} must be true or false`);
+}
+
+async function runTournamentWatchCommand(argv: string[]): Promise<void> {
+  const flags = parseFlags(argv);
+  const options = await tournamentOptionsFromFlags(flags);
+  const port = integer(flags, "port", 3_000);
+  const host = flags.host ?? "127.0.0.1";
+  const exitOnComplete = booleanFlag(flags, "exit-on-complete", false);
+  const hub = new LiveEventHub();
+  const snapshots = new SnapshotStore(hub.streamId);
+  const liveServer = createLiveServer({ hub, snapshots, host, port });
+  const actualPort = await liveServer.listen();
+  console.log(`Live tournament dashboard: http://${host}:${actualPort}/`);
+  let stopping = false;
+  const stop = async (exitCode?: number) => {
+    if (stopping) return;
+    stopping = true;
+    await liveServer.close().catch(() => undefined);
+    if (exitCode !== undefined) process.exitCode = exitCode;
+  };
+  const onSignal = () => { void stop(130); };
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
+  try {
+    await runTournament(options, {
+      observer: {
+        emit: (event) => snapshots.apply(hub.emit(event)),
+      },
+    });
+    if (exitOnComplete) await stop();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error);
+    if (exitOnComplete) {
+      await stop(1);
+      throw error;
+    }
+  } finally {
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+  }
 }
 
 async function main(): Promise<void> {
@@ -234,6 +289,7 @@ async function main(): Promise<void> {
   if (command === "dataset:stats") return runDatasetStats(argv.slice(1));
   if (command === "reference:mortal") return runReferenceMortal(argv.slice(1));
   if (command === "tournament") return runTournamentCommand(argv.slice(1));
+  if (command === "tournament:watch") return runTournamentWatchCommand(argv.slice(1));
   if (command === "hybrid:sweep") return runHybridSweep(argv.slice(1));
   throw new Error(`Unknown command: ${command}`);
 }
