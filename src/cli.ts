@@ -30,6 +30,7 @@ import { createReplayServer } from "./replay/server.js";
 import { loadReplay } from "./replay/loader.js";
 import { ReplayTimeline } from "./replay/timeline.js";
 import { exportReplayVideo } from "./export/video.js";
+import { DEFAULT_LOCALE, isLocale } from "./live/dashboard/i18n.js";
 import type { DecisionRecord } from "./types.js";
 
 interface Flags { [key: string]: string; }
@@ -372,6 +373,8 @@ async function runVideoExportCommand(argv: string[]): Promise<void> {
   const flags = parseFlags(argv);
   const debug = booleanFlag(flags, "debug", false);
   const output = required(flags, "out");
+  const locale = flags.locale ?? DEFAULT_LOCALE;
+  if (!isLocale(locale)) throw new Error("--locale must be en or ja");
   await exportReplayVideo({
     input: required(flags, "input"),
     gameId: required(flags, "game-id"),
@@ -381,6 +384,7 @@ async function runVideoExportCommand(argv: string[]): Promise<void> {
     fps: integer(flags, "fps", 30),
     speed: flags.speed === undefined ? 1 : Number.parseFloat(flags.speed),
     out: output,
+    locale,
     debug,
   });
   console.log("Wrote " + resolve(output) + " and metadata");

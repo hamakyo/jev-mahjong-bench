@@ -96,7 +96,10 @@ describe("offline replay", () => {
       expect(index.status).toBe(200);
       const snapshot = await fetch("http://127.0.0.1:" + port + "/api/replay/snapshot?cursor=1&mode=spectator");
       expect(snapshot.status).toBe(200);
-      expect((await snapshot.json()).replay.cursor).toBe(1);
+      const snapshotBody = await snapshot.json();
+      expect(snapshotBody.replay.cursor).toBe(1);
+      const japaneseSnapshot = await fetch("http://127.0.0.1:" + port + "/api/replay/snapshot?cursor=1&mode=spectator&locale=ja");
+      expect(await japaneseSnapshot.json()).toEqual(snapshotBody);
       const events = await fetch("http://127.0.0.1:" + port + "/api/replay/events?from=1&to=1&mode=spectator");
       expect((await events.json())).toHaveLength(1);
       const spectatorEvents = await fetch("http://127.0.0.1:" + port + "/api/replay/events?from=2&to=2&mode=spectator");
@@ -108,6 +111,7 @@ describe("offline replay", () => {
       const app = await fetch("http://127.0.0.1:" + port + "/assets/app.js");
       const appText = await app.text();
       expect(appText).toContain("renderDecisionTable");
+      expect(appText).toContain("const localeRuntime");
       expect(appText).toContain("previous-hand");
     } finally {
       await server.close();

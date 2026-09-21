@@ -237,6 +237,14 @@ single-step controls. Pause waits for the current provider decision batch to
 finish; it never changes the order of concurrent seat requests. Step advances
 exactly one phase: game-start, decision-batch, environment-step, or game-end.
 
+The Live and Replay dashboards share an English/Japanese language selector in
+the header. Locale resolution is `?locale=en|ja`, then
+`localStorage["jev-mahjong.locale"]`, then the browser's language list, and
+finally English. The selector stores only that locale preference; tournament
+snapshots, Replay cursors, events, and raw agent/model/action IDs remain
+unchanged. For example, use `http://127.0.0.1:3000/?locale=ja` to force
+Japanese for one page load.
+
 ### Offline replay
 
 Normal tournament runs and tournament:watch save internal observer events,
@@ -264,6 +272,7 @@ only the saved replay artifact and passes encoder arguments without a shell.
 pnpm video:export -- \
   --input results/live \
   --game-id GAME_ID \
+  --locale ja \
   --format mp4 \
   --fps 30 \
   --speed 1 \
@@ -272,7 +281,9 @@ pnpm video:export -- \
 
 Spectator is the default. Debug video requires --debug true; the command also
 writes a sidecar JSON containing source, cursor range, seed, viewport, codec,
-tool versions, and video SHA-256.
+tool versions, locale, and video SHA-256. Video export always passes the
+explicit locale to the browser and does not use browser localStorage or
+`navigator.language`; omit `--locale` to use English.
 
 ### LLM input and Mortal history
 

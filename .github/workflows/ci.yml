@@ -133,7 +133,11 @@ jobs:
           game_id=$(node -e 'const fs=require("node:fs"); const x=JSON.parse(fs.readFileSync("/tmp/video-tournament/replay/index.json","utf8")); process.stdout.write(x.games[0].gameId)')
           start=$(node -e 'const fs=require("node:fs"); const x=JSON.parse(fs.readFileSync("/tmp/video-tournament/replay/index.json","utf8")); process.stdout.write(String(x.games[0].startSequence))')
           end=$(node -e 'const fs=require("node:fs"); const x=JSON.parse(fs.readFileSync("/tmp/video-tournament/replay/index.json","utf8")); process.stdout.write(String(Math.min(x.games[0].endSequence, x.games[0].startSequence + 4)))')
-          pnpm video:export -- --input /tmp/video-tournament --game-id "$game_id" --from "$start" --to "$end" --format mp4 --fps 5 --speed 4 --out /tmp/video-tournament/smoke.mp4
+          pnpm video:export -- --input /tmp/video-tournament --game-id "$game_id" --from "$start" --to "$end" --locale en --format mp4 --fps 5 --speed 4 --out /tmp/video-tournament/smoke.mp4
           test -s /tmp/video-tournament/smoke.mp4
           test -s /tmp/video-tournament/smoke.mp4.json
           ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 /tmp/video-tournament/smoke.mp4
+          pnpm video:export -- --input /tmp/video-tournament --game-id "$game_id" --from "$start" --to "$end" --locale ja --format mp4 --fps 5 --speed 4 --out /tmp/video-tournament/smoke-ja.mp4
+          test -s /tmp/video-tournament/smoke-ja.mp4
+          test -s /tmp/video-tournament/smoke-ja.mp4.json
+          node -e 'const fs=require("node:fs"); const x=JSON.parse(fs.readFileSync("/tmp/video-tournament/smoke-ja.mp4.json","utf8")); if (x.locale !== "ja" || x.schemaVersion < 2) throw new Error("Japanese video metadata is invalid");'

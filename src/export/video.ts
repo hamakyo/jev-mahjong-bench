@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { DEFAULT_LOCALE, isLocale, type Locale } from "../live/dashboard/i18n.js";
 import { createReplayServer } from "../replay/server.js";
 import { loadReplay } from "../replay/loader.js";
 import { ReplayTimeline } from "../replay/timeline.js";
@@ -16,6 +17,7 @@ export interface VideoExportOptions {
   fps: number;
   speed: number;
   out: string;
+  locale: Locale;
   debug?: boolean;
   viewport?: { width: number; height: number };
 }
@@ -93,10 +95,12 @@ export function gameRange(timeline: ReplayTimeline, gameId: string, from: number
 }
 
 export async function exportReplayVideo(options: VideoExportOptions): Promise<void> {
+  const locale = options.locale ?? DEFAULT_LOCALE;
   if (!Number.isInteger(options.fps) || options.fps < 1 || options.fps > 120) throw new Error("fps must be from 1 to 120");
   if (!Number.isFinite(options.speed) || options.speed <= 0) throw new Error("speed must be positive");
   if (!options.out) throw new Error("video output is required");
   if (options.format !== "mp4" && options.format !== "webm") throw new Error("format must be mp4 or webm");
+  if (!isLocale(locale)) throw new Error("locale must be en or ja");
 
   let ffmpegVersion: CommandResult;
   try {
@@ -132,7 +136,7 @@ export async function exportReplayVideo(options: VideoExportOptions): Promise<vo
         ? String((event.event.event as Record<string, unknown>).type ?? "mjai")
         : event.event.type;
       const frames = frameCount(durationMs(type, options.speed), options.fps);
-      await page.goto("http://127.0.0.1:" + port + "/?mode=" + (options.debug ? "debug" : "spectator") + "&cursor=" + event.id, { waitUntil: "networkidle" });
+      await page.goto("http://127.0.0.1:" + port + "/?mode=" + (options.debug ? "debug" : "spectator") + "&locale=" + encodeURIComponent(locale) + "&cursor=" + event.id, { waitUntil: "networkidle" });
       for (let index = 0; index < frames; index += 1) {
         frame += 1;
         await page.screenshot({ path: join(temporary, String(frame).padStart(8, "0") + ".png") });
@@ -156,13 +160,14 @@ export async function exportReplayVideo(options: VideoExportOptions): Promise<vo
     }
     const videoHash = createHash("sha256").update(await readFile(output)).digest("hex");
     const metadata = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       sourceArtifactSha256: await sourceSha256(options.input),
       gameId: options.gameId,
       seed: data.manifest.games.find((game) => game.gameId === options.gameId)?.seed,
       from: range.from,
       to: range.to,
       mode: options.debug ? "debug" : "spectator",
+      locale,
       fps: options.fps,
       speed: options.speed,
       viewport,

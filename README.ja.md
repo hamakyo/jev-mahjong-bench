@@ -193,6 +193,13 @@ Stepを操作できます。Pauseは実行中のprovider判断を中断せず、
 座席の判断batchが完了してから停止します。Stepはgame-start、
 decision-batch、environment-step、game-endのいずれか1つだけ進めます。
 
+LiveとReplayのheaderにはEnglish／日本語の言語selectorがあります。localeの
+解決順は、URLの`?locale=en|ja`、`localStorage["jev-mahjong.locale"]`、
+ブラウザの言語一覧、英語の順です。localStorageへ保存するのはlocaleだけで、
+tournamentのsnapshot、Replay cursor、event、agent/model/actionのraw IDは
+変更しません。たとえば`http://127.0.0.1:3000/?locale=ja`で、そのページを
+日本語に固定できます。
+
 ### オフラインReplay
 
 通常のtournamentとtournament:watchは、providerを再実行せずに復元できる内部
@@ -217,6 +224,7 @@ encoderはshellを介さず起動します。
 pnpm video:export -- \
   --input results/live \
   --game-id GAME_ID \
+  --locale ja \
   --format mp4 \
   --fps 30 \
   --speed 1 \
@@ -225,7 +233,9 @@ pnpm video:export -- \
 
 既定はSpectatorです。Debug動画は--debug trueを明示した場合だけ作成でき、
 入力artifact、cursor範囲、seed、viewport、codec、tool version、動画SHA-256を
-sidecar JSONへ保存します。
+localeをsidecar JSONへ保存します。動画書き出しはbrowserのlocalStorageや
+`navigator.language`を使わず、全frameへ明示したlocaleを渡します。`--locale`を
+省略した場合は英語です。
 
 ### LLM入力とMortal履歴
 
