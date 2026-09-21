@@ -100,6 +100,11 @@ export async function exportReplayVideo(options: VideoExportOptions): Promise<vo
   } catch (error) {
     throw toolError("ffmpeg", error);
   }
+  try {
+    await runCommand("ffprobe", ["-version"]);
+  } catch (error) {
+    throw toolError("ffprobe", error);
+  }
   const playwright = await loadPlaywright();
   const data = await loadReplay(options.input);
   const timeline = new ReplayTimeline(data);
