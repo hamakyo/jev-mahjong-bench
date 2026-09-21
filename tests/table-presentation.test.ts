@@ -97,6 +97,7 @@ describe("table presentation", () => {
     expect(table.seats.top.melds[0]).toMatchObject({ type: "kakan", fromPlayer: 0, calledTileIndex: 1 });
     expect(table.seats.top.melds[1]).toMatchObject({ type: "pon", fromPlayer: 1, calledTileIndex: 0 });
     expect(tableStateRendererJs).toContain("meld.fromPlayer");
+    expect(tableStateRendererJs).toContain("if (typeof meld.calledTileIndex === \"number\") return meld.calledTileIndex;");
     expect(tableStateRendererJs).toContain("renderMeld(meld, seat.playerIndex)");
   });
 
@@ -118,6 +119,7 @@ describe("table presentation", () => {
     const store = new SnapshotStore("checkpoint-stream");
     const checkpoint = store.checkpoint();
     expect(store.restore({ ...checkpoint, presentationVersion: undefined } as unknown as SnapshotCheckpoint)).toBe(false);
+    expect(store.restore({ ...checkpoint, presentationVersion: 1 } as unknown as SnapshotCheckpoint)).toBe(false);
   });
 
   it("shares oriented table rendering and serves vendored SVG assets", async () => {

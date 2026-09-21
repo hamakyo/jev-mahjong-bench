@@ -118,7 +118,8 @@ ${tileCatalogRuntimeJs}
     return hand.map((tile) => assetTile(tile, "face", tile)).join("") + (drawn ? '<span class="draw-gap">' + assetTile(drawn, "face drawn", drawn) + '</span>' : '') || hiddenHand(seat.concealedTileCount, seat.drawnTilePending);
   };
   const calledTileIndexForSource = (meld, playerIndex) => {
-    if (typeof meld.fromPlayer !== "number" || !Number.isInteger(playerIndex)) return meld.calledTileIndex;
+    if (typeof meld.calledTileIndex === "number") return meld.calledTileIndex;
+    if (typeof meld.fromPlayer !== "number" || !Number.isInteger(playerIndex)) return undefined;
     const tileCount = Array.isArray(meld.tiles) ? meld.tiles.length : 0;
     if (!tileCount) return undefined;
     const relative = (meld.fromPlayer - playerIndex + 4) % 4;
