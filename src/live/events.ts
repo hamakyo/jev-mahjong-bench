@@ -36,6 +36,7 @@ export interface TournamentSettingsSnapshot {
   requestedSeats: string[];
   timeoutMs: number;
   pairedRuns: number | null;
+  registryHash?: string;
 }
 
 export interface TournamentStartEvent extends LiveEventBase {
@@ -75,9 +76,17 @@ export interface MjaiEvent extends LiveEventBase {
   event: unknown;
 }
 
+/** Non-sensitive counters derived from hidden MJAI fields for spectator rendering. */
+export interface PublicMjaiPresentationHint {
+  concealedTileCountByPlayer?: number[];
+  handCountDelta?: number;
+  drawnTilePending?: boolean;
+  tsumogiri?: boolean;
+}
+
 export interface DecisionStartEvent extends LiveEventBase {
   type: "decision:start";
-  observation: Pick<GameObservation, "state" | "legalActions" | "newEvents">;
+  observation: Omit<Pick<GameObservation, "state" | "legalActions" | "newEvents">, "state"> & { state: Record<string, unknown> };
 }
 
 export interface DecisionEndEvent extends LiveEventBase {
@@ -160,6 +169,7 @@ export interface PublicMjaiEvent extends LiveEventBase {
   type: "mjai";
   source: "bridge";
   event: Record<string, unknown>;
+  presentation?: PublicMjaiPresentationHint;
 }
 
 export interface PublicDecisionStartEvent extends LiveEventBase {
@@ -178,6 +188,14 @@ export interface PublicGameEndEvent extends LiveEventBase {
   ranks: number[];
   handCount: number;
   errorCount: number;
+  players: Array<{
+    agentId: string;
+    handCount: number;
+    wins: number;
+    dealIns: number;
+    riichi: number;
+    calls: number;
+  }>;
 }
 
 export interface PublicTournamentEndEvent extends LiveEventBase {

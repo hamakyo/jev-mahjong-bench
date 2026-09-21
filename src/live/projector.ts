@@ -104,13 +104,16 @@ function publicEvent(event: TournamentEvent): PublicLiveEvent {
         gameIndex: event.gameIndex,
         totalGames: event.totalGames,
       };
-    case "mjai":
+    case "mjai": {
+      const presentation = publicMjaiPresentationHint(event.event);
       return {
         ...base,
         type: "mjai",
         source: "bridge",
         event: projectPublicMjai(event.event),
+        ...(presentation ? { presentation } : {}),
       };
+    }
     case "decision:start":
       return { ...base, type: "decision:start" };
     case "decision:end": {
@@ -130,6 +133,14 @@ function publicEvent(event: TournamentEvent): PublicLiveEvent {
         ranks: [...event.ranks],
         handCount: event.handCount,
         errorCount: event.errorCount,
+        players: event.result.players.map((player) => ({
+          agentId: player.agentId,
+          handCount: player.handCount,
+          wins: player.wins,
+          dealIns: player.dealIns,
+          riichi: player.riichi,
+          calls: player.calls,
+        })),
       };
     case "tournament:end":
       return {
@@ -148,6 +159,46 @@ function publicEvent(event: TournamentEvent): PublicLiveEvent {
         totalGames: event.totalGames,
       };
   }
+}
+
+function publicMjaiPresentationHint(value: unknown): {
+  concealedTileCountByPlayer?: number[];
+  handCountDelta?: number;
+  drawnTilePending?: boolean;
+  tsumogiri?: boolean;
+} | undefined {
+  const raw = typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+  const type = typeof raw?.type === "string" ? raw.type : undefined;
+  if (!type) return undefined;
+  if (type === "start_kyoku" && Array.isArray(raw?.tehais)) {
+    return {
+      concealedTileCountByPlayer: raw.tehais.map((hand) => Array.isArray(hand) ? hand.length : 0),
+      drawnTilePending: false,
+    };
+  }
+  if (typeof raw?.actor !== "number" || !Number.isInteger(raw.actor) || raw.actor < 0 || raw.actor > 3) return undefined;
+  if (type === "tsumo") return { handCountDelta: 1, drawnTilePending: true };
+  if (type === "dahai") return {
+    handCountDelta: -1,
+    drawnTilePending: false,
+    tsumogiri: raw.tsumogiri === true,
+  };
+  if (["chi", "pon", "daiminkan", "ankan", "kakan"].includes(type)) {
+    const handCountDelta = type === "chi" || type === "pon"
+      ? -2
+      : type === "daiminkan"
+        ? -3
+        : type === "ankan"
+          ? -4
+          : -1;
+    return {
+      handCountDelta,
+      drawnTilePending: false,
+    };
+  }
+  return undefined;
 }
 
 export function projectTournamentEvent(event: TournamentEvent): {

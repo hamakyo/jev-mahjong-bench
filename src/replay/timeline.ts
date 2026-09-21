@@ -50,8 +50,8 @@ export class ReplayTimeline {
     const target = Math.max(0, Math.min(this.eventCount, Math.floor(cursor)));
     const checkpoint = this.latestCheckpoint(target);
     const store = new SnapshotStore(this.data.manifest.streamId);
-    const base = checkpoint?.sequence ?? 0;
-    if (checkpoint) store.restore(checkpoint.snapshot);
+    const restored = checkpoint ? store.restore(checkpoint.snapshot) : false;
+    const base = restored && checkpoint ? checkpoint.sequence : 0;
     for (const record of this.data.events.slice(base, target)) {
       store.apply(createLiveEventBatch(this.data.manifest.streamId, record.sequence, String(record.sequence), record.event));
     }
