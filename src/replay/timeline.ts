@@ -13,10 +13,12 @@ export interface ReplaySnapshotResult {
 
 export class ReplayTimeline {
   readonly data: ReplayData;
+  private readonly sortedCheckpoints: ReplayCheckpointRecord[];
   private lastAppliedDeltaCount = 0;
 
   constructor(data: ReplayData) {
     this.data = data;
+    this.sortedCheckpoints = [...data.checkpoints].sort((left, right) => left.sequence - right.sequence);
   }
 
   get eventCount(): number {
@@ -30,8 +32,9 @@ export class ReplayTimeline {
   events(from = 1, to = this.eventCount, mode: LiveMode = "spectator"): SequencedLiveEvent<PublicLiveEvent | DebugLiveEvent>[] {
     const start = Math.max(1, Math.floor(from));
     const end = Math.min(this.eventCount, Math.floor(to));
+    if (end < start) return [];
     return this.data.events
-      .filter((record) => record.sequence >= start && record.sequence <= end)
+      .slice(start - 1, end)
       .map((record) => {
         const batch = createLiveEventBatch(this.data.manifest.streamId, record.sequence, String(record.sequence), record.event);
         return {
@@ -49,8 +52,7 @@ export class ReplayTimeline {
     const store = new SnapshotStore(this.data.manifest.streamId);
     const base = checkpoint?.sequence ?? 0;
     if (checkpoint) store.restore(checkpoint.snapshot);
-    for (const record of this.data.events) {
-      if (record.sequence <= base || record.sequence > target) continue;
+    for (const record of this.data.events.slice(base, target)) {
       store.apply(createLiveEventBatch(this.data.manifest.streamId, record.sequence, String(record.sequence), record.event));
     }
     this.lastAppliedDeltaCount = target - base;
@@ -63,8 +65,19 @@ export class ReplayTimeline {
   }
 
   private latestCheckpoint(cursor: number): ReplayCheckpointRecord | undefined {
-    return this.data.checkpoints
-      .filter((checkpoint) => checkpoint.sequence <= cursor)
-      .sort((left, right) => right.sequence - left.sequence)[0];
+    let low = 0;
+    let high = this.sortedCheckpoints.length - 1;
+    let result: ReplayCheckpointRecord | undefined;
+    while (low <= high) {
+      const middle = Math.floor((low + high) / 2);
+      const checkpoint = this.sortedCheckpoints[middle]!;
+      if (checkpoint.sequence <= cursor) {
+        result = checkpoint;
+        low = middle + 1;
+      } else {
+        high = middle - 1;
+      }
+    }
+    return result;
   }
 }

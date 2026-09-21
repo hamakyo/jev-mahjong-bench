@@ -77,13 +77,17 @@ function toolError(command: string, error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
-function gameRange(timeline: ReplayTimeline, gameId: string, from: number | undefined, to: number | undefined): { from: number; to: number } {
+export function gameRange(timeline: ReplayTimeline, gameId: string, from: number | undefined, to: number | undefined): { from: number; to: number } {
   const game = timeline.data.index.games.find((entry) => entry.gameId === gameId);
   if (!game) throw new Error("unknown replay game ID: " + gameId);
   const start = from ?? game.startSequence;
-  const end = to ?? game.endSequence ?? timeline.eventCount;
-  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start || end > timeline.eventCount) {
-    throw new Error("video event range is outside the replay");
+  const nextGame = timeline.data.index.games
+    .filter((entry) => entry.startSequence > game.startSequence)
+    .sort((left, right) => left.startSequence - right.startSequence)[0];
+  const gameEnd = game.endSequence ?? (nextGame ? nextGame.startSequence - 1 : timeline.eventCount);
+  const end = to ?? gameEnd;
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < game.startSequence || end < start || end > gameEnd) {
+    throw new Error("video event range is outside the selected game");
   }
   return { from: start, to: end };
 }

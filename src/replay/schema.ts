@@ -46,6 +46,7 @@ export interface ReplayHandIndexEntry {
 
 export interface ReplayIndex {
   schemaVersion: typeof REPLAY_SCHEMA_VERSION;
+  revision: number;
   eventCount: number;
   checkpoints: Array<Pick<ReplayCheckpointRecord, "sequence" | "reason" | "byteOffset">>;
   games: ReplayGameIndexEntry[];
@@ -53,7 +54,8 @@ export interface ReplayIndex {
 
 export interface ReplayManifest {
   schemaVersion: typeof REPLAY_SCHEMA_VERSION;
-  status: "complete" | "failed";
+  revision: number;
+  status: "running" | "complete" | "failed";
   streamId: string;
   eventCount: number;
   checkpointInterval: number;

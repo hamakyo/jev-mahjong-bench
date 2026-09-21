@@ -1,5 +1,6 @@
 import { createServer, type Server, type ServerResponse } from "node:http";
 import { dashboardCss } from "../live/dashboard/index.js";
+import { decisionTableRendererJs, tableStateRendererJs } from "../live/dashboard/renderer.js";
 import type { LiveMode } from "../live/events.js";
 import { ReplayTimeline } from "./timeline.js";
 
@@ -68,6 +69,10 @@ export const replayDashboardHtml = `<!doctype html>
         <button id="play" type="button">Play</button>
         <button id="previous" type="button">◀</button>
         <button id="next" type="button">▶</button>
+        <button id="previous-hand" type="button">Previous hand</button>
+        <button id="hand-start" type="button">Hand start</button>
+        <button id="hand-end" type="button">Hand end</button>
+        <button id="next-hand" type="button">Next hand</button>
         <label>Speed <select id="speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
         <label>Mode <select id="mode-select"><option value="spectator">Spectator</option><option value="debug">Debug</option></select></label>
         <span id="cursor-label">0 / 0</span>
@@ -77,6 +82,7 @@ export const replayDashboardHtml = `<!doctype html>
         <article><span>Round</span><strong id="round">—</strong></article>
         <article><span>Honba</span><strong id="honba">0</strong></article>
         <article><span>Kyotaku</span><strong id="kyotaku">0</strong></article>
+        <article><span>Hand</span><strong id="hand">—</strong></article>
         <article><span>Status</span><strong id="status">idle</strong></article>
       </section>
       <section><h2>Scores</h2><div id="scores" class="score-grid"></div></section>
@@ -85,6 +91,7 @@ export const replayDashboardHtml = `<!doctype html>
         <article><h2>Melds</h2><div id="melds"></div></article>
         <article><h2>Dora</h2><div id="dora" class="tiles"></div><div id="events" class="muted"></div></article>
       </section>
+      <section><h2>Recent decisions</h2><div id="decisions" class="table-wrap"></div></section>
       <section id="debug-section" class="debug-section" hidden><h2>Debug snapshot</h2><pre id="debug"></pre></section>
     </main>
     <script src="/assets/app.js" defer></script>
@@ -98,39 +105,81 @@ export const replayDashboardJs = `(function () {
   let mode = params.get("mode") === "debug" ? "debug" : "spectator";
   let cursor = Number(params.get("cursor") || 0);
   let eventCount = 0;
+  let replayIndex = { games: [] };
   let playing = false;
   let timer;
+  let requestGeneration = 0;
+  let requestController;
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => char === "&" ? "&amp;" : char === "<" ? "&lt;" : char === ">" ? "&gt;" : char.charCodeAt(0) === 34 ? "&quot;" : "&#39;");
-  const tile = (value) => '<span class="tile">' + escapeHtml(value || "?") + '</span>';
-  const tileList = (values) => (Array.isArray(values) ? values : []).map(tile).join("") || '<span class="muted">—</span>';
   const setText = (id, value) => { const node = $(id); if (node) node.textContent = String(value ?? "—"); };
+${tableStateRendererJs}
+  function hands() {
+    return replayIndex.games.flatMap((game) => (game.hands || []).map((hand) => ({ game, hand }))).sort((left, right) => left.hand.startSequence - right.hand.startSequence);
+  }
+  function handEnd(entry, all) {
+    if (entry.hand.endSequence != null) return entry.hand.endSequence;
+    const index = all.findIndex((candidate) => candidate.hand.startSequence === entry.hand.startSequence);
+    const next = all[index + 1];
+    const gameEnd = entry.game.endSequence ?? eventCount;
+    return Math.min(gameEnd, next ? next.hand.startSequence - 1 : gameEnd);
+  }
+  function handContaining(value, all) {
+    return all.find((entry) => entry.hand.startSequence <= value && value <= handEnd(entry, all));
+  }
+  function previousHand(value, all) {
+    return all.filter((entry) => handEnd(entry, all) < value).at(-1);
+  }
+  function nextHand(value, all) {
+    return all.find((entry) => entry.hand.startSequence > value);
+  }
+  function updateHandControls() {
+    const all = hands();
+    const current = handContaining(cursor, all);
+    setText("hand", current ? String(current.hand.handIndex + 1) + " / " + String(current.game.hands.length) : "—");
+    $("hand-start").disabled = !current;
+    $("hand-end").disabled = !current;
+    $("previous-hand").disabled = !previousHand(cursor, all);
+    $("next-hand").disabled = !nextHand(cursor, all);
+  }
+  function goTo(value) {
+    cursor = Math.max(0, Math.min(eventCount, value));
+    void refresh().catch((error) => { $("connection").textContent = error.message; });
+  }
   function render(snapshot, metadata) {
     setText("round", snapshot.round || "—");
     setText("honba", snapshot.honba);
     setText("kyotaku", snapshot.kyotaku);
     setText("status", snapshot.status);
+    updateHandControls();
     setText("cursor-label", metadata.cursor + " / " + metadata.eventCount);
     $("cursor").value = metadata.cursor;
-    const scoreNode = $("scores");
-    scoreNode.innerHTML = seats.map((seat, index) => '<div class="score ' + (snapshot.currentSeat === index ? 'current' : '') + '"><span><b class="seat">' + seat + '</b> ' + escapeHtml(snapshot.seatAgents?.[seat] || '—') + '<br><small>rank ' + escapeHtml(snapshot.ranks?.[index] ?? '—') + '</small></span><strong>' + escapeHtml(snapshot.scores?.[index] ?? '—') + '</strong></div>').join("");
-    const renderBySeat = (id, values, formatter) => { const node = $(id); node.innerHTML = seats.map((seat) => '<div><div class="seat">' + seat + (snapshot.riichi?.[seat] ? ' · riichi' : '') + '</div>' + formatter(values?.[seat] || []) + '</div>').join(""); };
-    renderBySeat("discards", snapshot.discards, (values) => '<div class="tiles">' + tileList(values) + '</div>');
-    renderBySeat("melds", snapshot.melds, (values) => values.length ? values.map((value) => '<span class="meld">' + escapeHtml(value) + '</span>').join("") : '<span class="muted">—</span>');
-    $("dora").innerHTML = tileList(snapshot.doraIndicators);
-    $("events").innerHTML = (snapshot.recentEvents || []).slice(-8).reverse().map((event) => '<div>' + escapeHtml(event.type || "unknown") + '</div>').join("") || "No events yet";
+    renderTableState(snapshot);
+    renderDecisionTable(snapshot, mode);
     const debugSection = $("debug-section");
     debugSection.hidden = mode !== "debug";
     if (mode === "debug") $("debug").textContent = JSON.stringify(snapshot.debug || {}, null, 2);
   }
   async function refresh() {
-    const response = await fetch("/api/replay/snapshot?cursor=" + cursor + "&mode=" + mode, { cache: "no-store" });
-    if (!response.ok) throw new Error("replay snapshot request failed");
-    const body = await response.json();
-    cursor = body.replay.cursor;
-    eventCount = body.replay.eventCount;
-    $("cursor").max = eventCount;
-    render(body, body.replay);
-    $("connection").textContent = "Offline replay";
+    const generation = ++requestGeneration;
+    if (requestController) requestController.abort();
+    const controller = new AbortController();
+    requestController = controller;
+    try {
+      const response = await fetch("/api/replay/snapshot?cursor=" + cursor + "&mode=" + mode, { cache: "no-store", signal: controller.signal });
+      if (!response.ok) throw new Error("replay snapshot request failed");
+      const body = await response.json();
+      if (generation !== requestGeneration) return;
+      cursor = body.replay.cursor;
+      eventCount = body.replay.eventCount;
+      $("cursor").max = eventCount;
+      render(body, body.replay);
+      $("connection").textContent = "Offline replay";
+    } catch (error) {
+      if (error && typeof error === "object" && "name" in error && error.name === "AbortError") return;
+      throw error;
+    } finally {
+      if (generation === requestGeneration) requestController = undefined;
+    }
   }
   function schedule() {
     clearTimeout(timer);
@@ -143,14 +192,28 @@ export const replayDashboardJs = `(function () {
     }, 1000 / (Number($("speed").value) * 10));
   }
   $("play").addEventListener("click", () => { playing = !playing; $("play").textContent = playing ? "Pause" : "Play"; schedule(); });
-  $("previous").addEventListener("click", () => { cursor = Math.max(0, cursor - 1); void refresh(); });
-  $("next").addEventListener("click", () => { cursor = Math.min(eventCount, cursor + 1); void refresh(); });
-  $("cursor").addEventListener("input", (event) => { cursor = Number(event.target.value); void refresh(); });
+  $("previous").addEventListener("click", () => goTo(cursor - 1));
+  $("next").addEventListener("click", () => goTo(cursor + 1));
+  $("cursor").addEventListener("input", (event) => goTo(Number(event.target.value)));
+  $("hand-start").addEventListener("click", () => { const all = hands(); const current = handContaining(cursor, all); if (current) goTo(current.hand.startSequence); });
+  $("hand-end").addEventListener("click", () => { const all = hands(); const current = handContaining(cursor, all); if (current) goTo(handEnd(current, all)); });
+  $("previous-hand").addEventListener("click", () => { const entry = previousHand(cursor, hands()); if (entry) goTo(entry.hand.startSequence); });
+  $("next-hand").addEventListener("click", () => { const entry = nextHand(cursor, hands()); if (entry) goTo(entry.hand.startSequence); });
   $("mode-select").value = mode;
   $("mode").textContent = mode === "debug" ? "DEBUG · local only" : "SPECTATOR";
   if (mode === "debug") $("mode").classList.add("debug");
   $("mode-select").addEventListener("change", (event) => { mode = event.target.value === "debug" ? "debug" : "spectator"; $("mode").textContent = mode === "debug" ? "DEBUG · local only" : "SPECTATOR"; $("mode").classList.toggle("debug", mode === "debug"); void refresh(); });
-  fetch("/api/replay/manifest", { cache: "no-store" }).then((response) => response.json()).then((manifest) => { eventCount = manifest.eventCount; $("cursor").max = eventCount; return refresh(); }).catch((error) => { $("connection").textContent = error.message; });
+${decisionTableRendererJs}
+  Promise.all([
+    fetch("/api/replay/manifest", { cache: "no-store" }).then((response) => response.json()),
+    fetch("/api/replay/index", { cache: "no-store" }).then((response) => response.json()),
+  ]).then(([manifest, index]) => {
+    eventCount = manifest.eventCount;
+    replayIndex = index;
+    $("cursor").max = eventCount;
+    updateHandControls();
+    return refresh();
+  }).catch((error) => { $("connection").textContent = error.message; });
 })();`;
 
 export function createReplayServer(options: ReplayServerOptions): ReplayServer {
@@ -207,6 +270,7 @@ async function handleReplayRequest(
   if (url.pathname === "/assets/styles.css") return textResponse(response, "text/css; charset=utf-8", dashboardCss);
   if (url.pathname === "/api/health") return jsonResponse(response, 200, { ok: true, eventCount: options.timeline.eventCount });
   if (url.pathname === "/api/replay/manifest") return jsonResponse(response, 200, options.timeline.data.manifest);
+  if (url.pathname === "/api/replay/index") return jsonResponse(response, 200, options.timeline.data.index);
   if (url.pathname === "/api/replay/snapshot") {
     const cursor = integer(url.searchParams.get("cursor"), 0);
     const snapshot = options.timeline.snapshot(cursor, mode(url.searchParams.get("mode")));
