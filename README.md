@@ -245,6 +245,20 @@ snapshots, Replay cursors, events, and raw agent/model/action IDs remain
 unchanged. For example, use `http://127.0.0.1:3000/?locale=ja` to force
 Japanese for one page load.
 
+The primary Spectator view is a fixed four-seat table: player indexes stay at
+bottom/right/top/left while the current East/South/West/North wind and dealer
+labels update at each hand. Hands, melds, and rivers use the same top-down
+orientation in Live, Replay, and video export. Rivers wrap six tiles per row;
+the current discard and riichi declaration are highlighted. Spectator exposes
+concealed-hand counts and tile backs only. Debug mode may show reconstructed
+hands and provider diagnostics.
+
+Tile faces are vendored locally from
+[FluffyStuff/riichi-mahjong-tiles](https://github.com/FluffyStuff/riichi-mahjong-tiles)
+under its public-domain/CC0 notice in
+`src/live/dashboard/assets/tiles/NOTICE.md`. MJAI tile IDs, including red
+fives, are mapped centrally in `src/live/dashboard/tiles.ts`.
+
 ### Offline replay
 
 Normal tournament runs and tournament:watch save internal observer events,

@@ -200,6 +200,17 @@ tournamentのsnapshot、Replay cursor、event、agent/model/actionのraw IDは
 変更しません。たとえば`http://127.0.0.1:3000/?locale=ja`で、そのページを
 日本語に固定できます。
 
+Spectatorの主画面は、四席を固定した卓上表示です。player indexは画面下・右・上・左に
+固定され、局ごとに東南西北と親の表示だけが更新されます。手牌・副露・河は同じ卓上視点
+で回転し、河は6枚ごとに折り返します。最新打牌と立直宣言を強調表示します。Spectator
+では非公開手牌を枚数と牌背だけで表示し、Debugでのみ復元した手牌とprovider診断を表示
+できます。Live、Replay、動画書き出しは同じrendererを使います。
+
+牌画像は[FluffyStuff/riichi-mahjong-tiles](https://github.com/FluffyStuff/riichi-mahjong-tiles)
+からローカルvendorしています。public domain／CC0の出典は
+`src/live/dashboard/assets/tiles/NOTICE.md`に記録し、MJAIの牌IDと赤牌を含むasset対応は
+`src/live/dashboard/tiles.ts`へ集約しています。
+
 ### オフラインReplay
 
 通常のtournamentとtournament:watchは、providerを再実行せずに復元できる内部
