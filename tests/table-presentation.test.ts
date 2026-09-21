@@ -83,6 +83,7 @@ describe("table presentation", () => {
     apply(mjai({ type: "dahai", actor: 0, pai: "8m", tsumogiri: true }));
     apply(mjai({ type: "ankan", actor: 1, consumed: ["1p", "1p", "1p", "1p"] }));
     apply(mjai({ type: "pon", actor: 2, target: 0, pai: "3s", consumed: ["3s", "3s"] }));
+    apply(mjai({ type: "pon", actor: 2, target: 1, pai: "4s", consumed: ["4s", "4s"] }));
     apply(mjai({ type: "kakan", actor: 2, pai: "3s", consumed: ["3s", "3s", "3s"] }));
 
     const table = store.getSnapshot("spectator").table;
@@ -91,8 +92,11 @@ describe("table presentation", () => {
     expect(table.seats.bottom.river[7]).toMatchObject({ tile: "8m", riichi: true, tsumogiri: true });
     expect(table.latestDiscard).toEqual({ playerIndex: 0, riverIndex: 7 });
     expect(table.seats.right.melds[0]).toMatchObject({ type: "ankan", tiles: ["1p", "1p", "1p", "1p"], concealedIndexes: [0, 3] });
-    expect(table.seats.top.melds).toHaveLength(1);
-    expect(table.seats.top.melds[0]?.type).toBe("kakan");
+    expect(table.seats.top.melds).toHaveLength(2);
+    expect(table.seats.top.melds[0]).toMatchObject({ type: "kakan", fromPlayer: 0, calledTileIndex: 1 });
+    expect(table.seats.top.melds[1]).toMatchObject({ type: "pon", fromPlayer: 1, calledTileIndex: 0 });
+    expect(tableStateRendererJs).toContain("meld.fromPlayer");
+    expect(tableStateRendererJs).toContain("renderMeld(meld, seat.playerIndex)");
   });
 
   it("does not restore legacy checkpoints without a presentation version", () => {
@@ -107,6 +111,17 @@ describe("table presentation", () => {
     expect(tableStateRendererJs).toContain("right: \"90deg\"");
     expect(tileAssetFilename("0m")).toBe("Man5-Dora.svg");
     expect(tileAssetFilename("5pr")).toBe("Pin5-Dora.svg");
+    expect(["E", "S", "W", "N", "P", "F", "C"].map(tileAssetFilename)).toEqual([
+      "Ton.svg", "Nan.svg", "Shaa.svg", "Pei.svg", "Haku.svg", "Hatsu.svg", "Chun.svg",
+    ]);
+    expect(["1z", "2z", "3z", "4z", "5z", "6z", "7z"].map(tileAssetFilename)).toEqual([
+      "Ton.svg", "Nan.svg", "Shaa.svg", "Pei.svg", "Haku.svg", "Hatsu.svg", "Chun.svg",
+    ]);
+    expect(tableStateRendererJs).toContain("mjaiHonorSortValues");
+    expect(tableStateRendererJs).toContain("tableWindForPlayer(snapshot, snapshot.oya)");
+    expect(tableStateRendererJs).toContain("tableWindForPlayer(snapshot, snapshot.currentSeat)");
+    expect(tableStateRendererJs).toContain("hiddenHand = (count, drawnTilePending)");
+    expect(tableStateRendererJs).toContain("drawnBack");
     const hub = new LiveEventHub({ streamId: "asset-stream" });
     const server = createLiveServer({ hub, snapshots: new SnapshotStore(hub.streamId), port: 0 });
     const port = await server.listen();

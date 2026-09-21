@@ -32,11 +32,23 @@ export const tableStateRendererJs = String.raw`
 ${tileCatalogRuntimeJs}
   const tablePositions = ["top", "left", "right", "bottom"];
   const tableRotations = { bottom: "0deg", right: "90deg", top: "180deg", left: "-90deg" };
+  const tableSeatForPlayer = (snapshot, player) => Number.isInteger(player)
+    ? Object.values(snapshot.table?.seats || {}).find((seat) => seat && seat.playerIndex === player)
+    : undefined;
+  const tableWindForPlayer = (snapshot, player) => {
+    const tableSeat = tableSeatForPlayer(snapshot, player);
+    if (tableSeat?.currentWind) return tableSeat.currentWind;
+    if (!Number.isInteger(player)) return undefined;
+    const oya = Number.isInteger(snapshot.oya) ? snapshot.oya : 0;
+    return ["E", "S", "W", "N"][(player - oya + 4) % 4];
+  };
   const tileSortValue = (value) => {
     const text = String(value || "");
     const match = /^(0|[1-9])([mps])(?:r)?$/.exec(text);
     if (match) return ({ m: 0, p: 10, s: 20 }[match[2]] || 0) + (Number(match[1]) === 0 ? 5.1 : Number(match[1]) + (/r$/.test(text) ? 0.1 : 0));
-    return /^[1-7]z$/.test(text) ? 30 + Number(text[0]) : 99;
+    const normalized = text.toUpperCase();
+    if (mjaiHonorSortValues[normalized] !== undefined) return mjaiHonorSortValues[normalized];
+    return /^[1-7]z$/.test(normalized) ? 30 + Number(normalized[0]) : 99;
   };
   const sortedHand = (values) => (Array.isArray(values) ? values : []).map((value, index) => ({ value, index })).sort((left, right) => tileSortValue(left.value) - tileSortValue(right.value) || left.index - right.index).map((entry) => entry.value);
   const assetTile = (value, className, ariaLabel) => {
@@ -44,16 +56,35 @@ ${tileCatalogRuntimeJs}
     const asset = text === "Back.svg" ? "Back.svg" : tileAssetFilename(text);
     return '<span class="tile-image ' + (className || '') + '"' + (ariaLabel ? ' aria-label="' + escapeHtml(ariaLabel) + '"' : '') + '><img src="/assets/tiles/' + encodeURIComponent(asset) + '" alt="' + escapeHtml(ariaLabel || text) + '" decoding="async"></span>';
   };
-  const hiddenHand = (count) => Array.from({ length: Math.max(0, Number(count) || 0) }, () => assetTile("Back.svg", "concealed", localeRuntime.t("table.concealed"))).join("") || '<span class="muted">—</span>';
+  const hiddenHand = (count, drawnTilePending) => {
+    const total = Math.max(0, Number(count) || 0);
+    const drawn = drawnTilePending === true && total > 0;
+    const concealedCount = drawn ? total - 1 : total;
+    const backs = Array.from({ length: concealedCount }, () => assetTile("Back.svg", "concealed", localeRuntime.t("table.concealed"))).join("");
+    const drawnBack = drawn ? '<span class="draw-gap">' + assetTile("Back.svg", "concealed drawn", localeRuntime.t("table.concealed")) + '</span>' : '';
+    return backs + drawnBack || '<span class="muted">—</span>';
+  };
   const visibleHand = (seat, mode) => {
-    if (mode !== "debug" || !Array.isArray(seat.debugHand)) return hiddenHand(seat.concealedTileCount);
+    if (mode !== "debug" || !Array.isArray(seat.debugHand)) return hiddenHand(seat.concealedTileCount, seat.drawnTilePending);
     const drawn = seat.debugDrawnTile;
     const hand = sortedHand(seat.debugHand);
     const drawnIndex = drawn ? hand.lastIndexOf(drawn) : -1;
     if (drawnIndex >= 0) hand.splice(drawnIndex, 1);
-    return hand.map((tile) => assetTile(tile, "face", tile)).join("") + (drawn ? '<span class="draw-gap">' + assetTile(drawn, "face drawn", drawn) + '</span>' : '') || hiddenHand(seat.concealedTileCount);
+    return hand.map((tile) => assetTile(tile, "face", tile)).join("") + (drawn ? '<span class="draw-gap">' + assetTile(drawn, "face drawn", drawn) + '</span>' : '') || hiddenHand(seat.concealedTileCount, seat.drawnTilePending);
   };
-  const renderMeld = (meld) => (meld.tiles || []).map((tile, index) => assetTile((meld.concealedIndexes || []).includes(index) ? "Back.svg" : tile, (meld.calledTileIndex === index ? "called" : "face"), meld.concealedIndexes?.includes(index) ? "concealed meld tile" : tile)).join("");
+  const calledTileIndexForSource = (meld, playerIndex) => {
+    if (typeof meld.fromPlayer !== "number" || !Number.isInteger(playerIndex)) return meld.calledTileIndex;
+    const tileCount = Array.isArray(meld.tiles) ? meld.tiles.length : 0;
+    if (!tileCount) return undefined;
+    const relative = (meld.fromPlayer - playerIndex + 4) % 4;
+    if (relative === 3) return 0;
+    if (relative === 2) return Math.floor((tileCount - 1) / 2);
+    return tileCount - 1;
+  };
+  const renderMeld = (meld, playerIndex) => {
+    const calledIndex = calledTileIndexForSource(meld, playerIndex);
+    return (meld.tiles || []).map((tile, index) => assetTile((meld.concealedIndexes || []).includes(index) ? "Back.svg" : tile, (calledIndex === index ? "called" : "face"), meld.concealedIndexes?.includes(index) ? "concealed meld tile" : tile)).join("");
+  };
   const renderRiver = (seat, snapshot, mode) => (seat.river || []).map((riverTile, index) => {
     const latest = snapshot.table?.latestDiscard?.playerIndex === seat.playerIndex && snapshot.table?.latestDiscard?.riverIndex === index;
     const classes = [riverTile.riichi ? "riichi-discard" : "", latest ? "latest-discard" : ""].filter(Boolean).join(" ");
@@ -62,7 +93,7 @@ ${tileCatalogRuntimeJs}
   }).join("") || '<span class="muted">—</span>';
   const seatFallback = (snapshot, player) => {
     const position = tablePositions.find((candidate) => candidate === ["bottom", "right", "top", "left"][player]);
-    const wind = ["E", "S", "W", "N"][player];
+    const wind = tableWindForPlayer(snapshot, player);
     return { playerIndex: player, position, agentId: snapshot.seatAgents?.[wind] || "—", currentWind: wind, isDealer: snapshot.oya === player, score: snapshot.scores?.[player] || 0, rank: snapshot.ranks?.[player], concealedTileCount: 0, drawnTilePending: false, river: [], melds: [], riichi: false };
   };
   function renderMahjongTable(snapshot, mode) {
@@ -71,13 +102,13 @@ ${tileCatalogRuntimeJs}
     const label = (key, params) => localeRuntime.t(key, params);
     const seatMap = snapshot.table?.seats || {};
     const seatsForPosition = Object.fromEntries(tablePositions.map((position) => [position, seatMap[position] || seatFallback(snapshot, ["top", "left", "right", "bottom"].indexOf(position))]));
-    const central = '<div class="table-center"><div class="center-round">' + escapeHtml(localeRuntime.formatRound(snapshot.round)) + '</div><div class="center-meta"><span>' + label("table.honba") + ' ' + escapeHtml(snapshot.honba ?? 0) + '</span><span>' + label("table.kyotaku") + ' ' + escapeHtml(snapshot.kyotaku ?? 0) + '</span></div><div class="center-dora"><span>' + label("table.dora") + '</span><div class="center-dora-tiles">' + (snapshot.doraIndicators || []).map((tile) => assetTile(tile, "face", tile)).join("") + '</div></div><div class="center-turn">' + label("table.dealer") + ': ' + escapeHtml(localeRuntime.formatSeat(snapshot.oya)) + ' · ' + label("table.currentTurn") + ': ' + escapeHtml(localeRuntime.formatSeat(snapshot.currentSeat)) + '</div></div>';
+    const central = '<div class="table-center"><div class="center-round">' + escapeHtml(localeRuntime.formatRound(snapshot.round)) + '</div><div class="center-meta"><span>' + label("table.honba") + ' ' + escapeHtml(snapshot.honba ?? 0) + '</span><span>' + label("table.kyotaku") + ' ' + escapeHtml(snapshot.kyotaku ?? 0) + '</span></div><div class="center-dora"><span>' + label("table.dora") + '</span><div class="center-dora-tiles">' + (snapshot.doraIndicators || []).map((tile) => assetTile(tile, "face", tile)).join("") + '</div></div><div class="center-turn">' + label("table.dealer") + ': ' + escapeHtml(localeRuntime.formatSeat(tableWindForPlayer(snapshot, snapshot.oya))) + ' · ' + label("table.currentTurn") + ': ' + escapeHtml(localeRuntime.formatSeat(tableWindForPlayer(snapshot, snapshot.currentSeat))) + '</div></div>';
     const zones = tablePositions.map((position) => {
       const seat = seatsForPosition[position];
       const current = seat.playerIndex === snapshot.currentSeat;
       const dealer = seat.isDealer;
       const labels = '<div class="seat-labels"><strong>' + escapeHtml(seat.agentId) + '</strong><span>' + escapeHtml(localeRuntime.formatSeat(seat.currentWind)) + (dealer ? ' · ' + label("table.dealer") : '') + '</span><span>' + escapeHtml(String(seat.score)) + (seat.rank == null ? '' : ' · ' + label("table.rank") + ' ' + escapeHtml(String(seat.rank))) + '</span></div>';
-      const tiles = '<div class="oriented-frame" style="--seat-rotation:' + tableRotations[position] + '"><div class="oriented-tiles"><div class="table-hand" aria-label="' + escapeHtml(label("table.hand")) + '">' + visibleHand(seat, mode) + '</div><div class="table-melds" aria-label="' + escapeHtml(label("table.melds")) + '">' + (seat.melds || []).map(renderMeld).join('<span class="meld-gap"></span>') + '</div><div class="river" aria-label="' + escapeHtml(label("table.discards")) + '">' + renderRiver(seat, snapshot, mode) + '</div></div></div>';
+      const tiles = '<div class="oriented-frame" style="--seat-rotation:' + tableRotations[position] + '"><div class="oriented-tiles"><div class="table-hand" aria-label="' + escapeHtml(label("table.hand")) + '">' + visibleHand(seat, mode) + '</div><div class="table-melds" aria-label="' + escapeHtml(label("table.melds")) + '">' + (seat.melds || []).map((meld) => renderMeld(meld, seat.playerIndex)).join('<span class="meld-gap"></span>') + '</div><div class="river" aria-label="' + escapeHtml(label("table.discards")) + '">' + renderRiver(seat, snapshot, mode) + '</div></div></div>';
       return '<div class="seat-zone position-' + position + (current ? ' current-actor' : '') + (dealer ? ' dealer' : '') + '" data-player-index="' + seat.playerIndex + '">' + labels + tiles + '</div>';
     }).join("");
     root.innerHTML = zones + central;

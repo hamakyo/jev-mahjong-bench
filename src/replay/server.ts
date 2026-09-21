@@ -155,8 +155,8 @@ ${decisionTableRendererJs}
     setText("round", localeRuntime.formatRound(snapshot.round));
     setText("honba", snapshot.honba);
     setText("kyotaku", snapshot.kyotaku);
-    setText("dealer", localeRuntime.formatSeat(snapshot.oya));
-    setText("current-turn", localeRuntime.formatSeat(snapshot.currentSeat));
+    setText("dealer", localeRuntime.formatSeat(tableWindForPlayer(snapshot, snapshot.oya)));
+    setText("current-turn", localeRuntime.formatSeat(tableWindForPlayer(snapshot, snapshot.currentSeat)));
     setText("status", localeRuntime.formatStatus(snapshot.status));
     updateHandControls();
     setText("cursor-label", metadata.cursor + " / " + metadata.eventCount);

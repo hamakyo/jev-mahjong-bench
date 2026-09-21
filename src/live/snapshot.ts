@@ -361,7 +361,16 @@ function tileKind(value: string): string {
   return value.replace(/^0([mps])$/, "5$1").replace(/r$/, "");
 }
 
-function meldView(event: Record<string, unknown>): MeldView | undefined {
+function calledTileIndexForSource(actor: number | undefined, target: number | undefined, tileCount: number): number | undefined {
+  if (!tileCount) return undefined;
+  if (actor === undefined || target === undefined) return tileCount - 1;
+  const relative = (target - actor + 4) % 4;
+  if (relative === 3) return 0;
+  if (relative === 2) return Math.floor((tileCount - 1) / 2);
+  return tileCount - 1;
+}
+
+function meldView(event: Record<string, unknown>, actor?: number): MeldView | undefined {
   const type = typeof event.type === "string" && ["chi", "pon", "daiminkan", "ankan", "kakan"].includes(event.type)
     ? event.type as MeldView["type"]
     : undefined;
@@ -374,16 +383,14 @@ function meldView(event: Record<string, unknown>): MeldView | undefined {
     ? (consumed.length ? consumed : pai ? [pai, pai, pai, pai] : [])
     : [...consumed, ...(pai ? [pai] : [])];
   if (!tiles.length) return undefined;
-  const view: MeldView = {
-    type,
-    tiles,
-    ...(typeof event.target === "number" ? { fromPlayer: event.target } : {}),
-  };
+  const target = playerIndex(event.target);
+  const view: MeldView = { type, tiles };
+  if (target !== undefined) view.fromPlayer = target;
   if (type === "ankan") {
     view.concealedIndexes = [0, 3];
   } else if (pai) {
-    const index = tiles.lastIndexOf(pai);
-    if (index >= 0) view.calledTileIndex = index;
+    const calledTileIndex = calledTileIndexForSource(actor, target, tiles.length);
+    if (calledTileIndex !== undefined) view.calledTileIndex = calledTileIndex;
   }
   return view;
 }
@@ -441,7 +448,7 @@ function updateMjai(snapshot: MutableSnapshot, event: Record<string, unknown>): 
     applyCountHint(snapshot, event);
   } else if (["chi", "pon", "daiminkan", "ankan", "kakan"].includes(type) && actor !== undefined) {
     const seat = SEATS[actor]!;
-    const view = meldView(event);
+    const view = meldView(event, actor);
     if (view) {
       const melds = snapshot.meldsByPlayer[actor] ?? [];
       if (view.type === "kakan") {

@@ -6,6 +6,27 @@ export const TILE_ASSET_LICENSE = "Public domain / CC0 1.0";
 
 const SUITS = ["m", "p", "s"] as const;
 const HONORS = ["Ton", "Nan", "Shaa", "Pei", "Haku", "Hatsu", "Chun"] as const;
+const MJAI_HONOR_ASSETS = {
+  E: "Ton.svg",
+  S: "Nan.svg",
+  W: "Shaa.svg",
+  N: "Pei.svg",
+  P: "Haku.svg",
+  F: "Hatsu.svg",
+  C: "Chun.svg",
+} as const;
+export const MJAI_HONOR_SORT_VALUES = {
+  E: 31,
+  S: 32,
+  W: 33,
+  N: 34,
+  P: 35,
+  F: 36,
+  C: 37,
+} as const;
+const HONOR_ASSETS_BY_MPSZ = Object.fromEntries(
+  HONORS.map((asset, index) => [`${index + 1}z`, `${asset}.svg`]),
+) as Record<string, string>;
 
 export const TILE_ASSET_FILENAMES = [
   "Back.svg",
@@ -31,6 +52,9 @@ function normalizedTile(value: string): { rank: number; suit: "m" | "p" | "s" } 
 
 export function tileAssetFilename(value: unknown): TileAssetFilename {
   if (typeof value !== "string") return "Blank.svg";
+  const normalized = value.trim().toUpperCase();
+  const mjaiHonor = MJAI_HONOR_ASSETS[normalized as keyof typeof MJAI_HONOR_ASSETS];
+  if (mjaiHonor) return mjaiHonor;
   const tile = normalizedTile(value);
   if (tile) {
     const prefix = tile.suit === "m" ? "Man" : tile.suit === "p" ? "Pin" : "Sou";
@@ -38,8 +62,8 @@ export function tileAssetFilename(value: unknown): TileAssetFilename {
     const filename = `${prefix}${red ? "5-Dora" : tile.rank}.svg`;
     if (TILE_ASSET_SET.has(filename)) return filename as TileAssetFilename;
   }
-  const honorIndex = /^(?:[1-7])z$/.exec(value.trim());
-  if (honorIndex) return `${HONORS[Number(value[0]) - 1]}.svg` as TileAssetFilename;
+  const mpszHonor = HONOR_ASSETS_BY_MPSZ[value.trim().toLowerCase()];
+  if (mpszHonor) return mpszHonor as TileAssetFilename;
   return "Blank.svg";
 }
 
@@ -48,15 +72,19 @@ export function tileAssetPath(filename: string): string | undefined {
 }
 
 export const tileCatalogRuntimeJs = String.raw`
+  const mjaiHonorAssets = ${JSON.stringify(MJAI_HONOR_ASSETS)};
+  const mpszHonorAssets = ${JSON.stringify(HONOR_ASSETS_BY_MPSZ)};
+  const mjaiHonorSortValues = ${JSON.stringify(MJAI_HONOR_SORT_VALUES)};
   const tileAssetFilename = (value) => {
     const text = String(value ?? '').trim();
+    const normalized = text.toUpperCase();
+    if (mjaiHonorAssets[normalized]) return mjaiHonorAssets[normalized];
     const match = /^(0|[1-9])([mps])(?:r)?$/.exec(text);
     if (match) {
       const prefix = match[2] === 'm' ? 'Man' : match[2] === 'p' ? 'Pin' : 'Sou';
       return prefix + ((match[1] === '0' || /r$/.test(text)) ? '5-Dora' : match[1]) + '.svg';
     }
-    const honors = ['Ton', 'Nan', 'Shaa', 'Pei', 'Haku', 'Hatsu', 'Chun'];
-    if (/^[1-7]z$/.test(text)) return honors[Number(text[0]) - 1] + '.svg';
+    if (mpszHonorAssets[text.toLowerCase()]) return mpszHonorAssets[text.toLowerCase()];
     return 'Blank.svg';
   };
   const tileAssetUrl = (value) => '/assets/tiles/' + encodeURIComponent(tileAssetFilename(value));

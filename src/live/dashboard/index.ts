@@ -174,8 +174,8 @@ ${decisionTableRendererJs}
     setText("honba", snapshot.honba);
     setText("kyotaku", snapshot.kyotaku);
     setText("games", (snapshot.tournament?.completedGames || 0) + " / " + (snapshot.tournament?.totalGames || 0));
-    setText("dealer", localeRuntime.formatSeat(snapshot.oya));
-    setText("current-turn", localeRuntime.formatSeat(snapshot.currentSeat));
+    setText("dealer", localeRuntime.formatSeat(tableWindForPlayer(snapshot, snapshot.oya)));
+    setText("current-turn", localeRuntime.formatSeat(tableWindForPlayer(snapshot, snapshot.currentSeat)));
     setText("status", localeRuntime.formatStatus(snapshot.status));
     renderTableState(snapshot, mode);
     const agents = $("agents");
