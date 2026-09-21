@@ -257,13 +257,41 @@ HybridはまずJevに判断を依頼します。合法なJev手の確信度が�
 ```bash
 pnpm hybrid:sweep -- \
   --dataset datasets/tenhou-mortal.jsonl \
-  --thresholds 0.50,0.65,0.75,0.85,0.95 \
   --out results/hybrid-sweep
+
+# provider-calls.jsonlを再利用してproviderを再呼び出しせず再評価する
+pnpm hybrid:sweep -- \
+  --dataset datasets/tenhou-mortal.jsonl \
+  --cache-in results/hybrid-sweep/provider-calls.jsonl \
+  --thresholds 0.10,0.60,0.70 \
+  --out results/hybrid-sweep-re-eval
 ```
 
 スイープでは各サンプルについてJevとGPTをそれぞれ一度だけ実行し、同じ応答
 から全閾値を算出します。GPT-only baselineは全サンプル集合で作成し、閾値別の
-Hybrid usageはその閾値でGPTが呼び出された判断だけを集計します。
+Hybrid usageはその閾値でGPTが呼び出された判断だけを集計します。thresholdの
+既定候補は`0.20,0.25,0.30,0.35,0.40,0.50`で、`provider-calls.jsonl`、
+confidence分布、provider別token、fallback/error理由、Pareto frontierを保存します。
+
+完全対局では`hybrid@0.30`と`hybrid@0.40`を同じpaired gameの別席として比較できます。
+従来の`hybrid`と`--hybrid-threshold`も後方互換で、既定値は`0.75`です。
+
+calibration/evaluationは牌譜由来sampleが分離されないよう、`gameIdHash`単位で分割します。
+
+```bash
+pnpm dataset:split -- \
+  --dataset datasets/mortal-reference.jsonl \
+  --calibration-out datasets/calibration.jsonl \
+  --evaluation-out datasets/evaluation.jsonl \
+  --ratio 0.7 --seed 42 --manifest datasets/split.json
+```
+
+manifestには入力・出力datasetのSHA-256、sample/game数、seed、ratio、両split間の
+`gameIdHash`重複なしが記録されます。
+
+held-out評価では、まずcalibration setで全thresholdをsweepし、evaluation setを
+見る前にPareto frontierから少なくとも2候補を選びます。その後は選択済み候補
+だけをevaluation setで評価し、結果を見てthresholdを再調整しません。
 
 ## 公平性と対象範囲
 

@@ -231,15 +231,15 @@ function percent(value: number): string { return `${(value * 100).toFixed(1)}%`;
 
 export function renderTournamentMarkdown(metrics: TournamentMetrics): string {
   const rows = metrics.agents.map((agent) =>
-    `| ${agent.agentId} | ${agent.games} | ${estimateIntervalText(agent.meanScore, agent.scoreInterval)} | ${estimateIntervalText(agent.meanRank, agent.rankInterval)} | ${percent(agent.firstRate)} | ${percent(agent.fourthRate)} | ${percent(agent.winRate)} | ${percent(agent.dealInRate)} | ${percent(agent.riichiRate)} | ${percent(agent.callRate)} | ${agent.decisions} | ${agent.p50LatencyMs.toFixed(1)} / ${agent.p95LatencyMs.toFixed(1)} | ${agent.meanInputBytes.toFixed(0)} / ${agent.maxInputBytes} | ${percent(agent.escalationRate)} | ${agent.retryCount} | ${agent.jevInputTokens} / ${agent.jevOutputTokens} | ${agent.gptInputTokens} / ${agent.gptOutputTokens} |`);
+    `| ${agent.agentId} | ${agent.games} | ${estimateIntervalText(agent.meanScore, agent.scoreInterval)} | ${estimateIntervalText(agent.meanRank, agent.rankInterval)} | ${percent(agent.firstRate)} | ${percent(agent.fourthRate)} | ${percent(agent.winRate)} | ${percent(agent.dealInRate)} | ${percent(agent.riichiRate)} | ${percent(agent.callRate)} | ${agent.decisions} | ${agent.p50LatencyMs.toFixed(1)} / ${agent.p95LatencyMs.toFixed(1)} | ${agent.meanInputBytes.toFixed(0)} / ${agent.maxInputBytes} | ${percent(agent.escalationRate)} | ${percent(agent.fallbackRate)} | ${percent(agent.errorRate)} | ${agent.retryCount} | ${agent.jevInputTokens} / ${agent.jevOutputTokens} | ${agent.gptInputTokens} / ${agent.gptOutputTokens} | ${agent.inputTokens} / ${agent.outputTokens} |`);
   const pairRows = metrics.pairwise.map((pair) =>
     `| ${pair.leftAgentId} − ${pair.rightAgentId} | ${pair.pairs} | ${estimateIntervalText(pair.meanScoreDifference, pair.scoreDifferenceInterval)} | ${estimateIntervalText(pair.meanRankDifference, pair.rankDifferenceInterval)} |`);
   return `# Tournament report
 
 Score/rank columns show pair-block mean and 95% interval. Rates are Wilson 95% intervals in JSON.
 
-| Agent | Games | Score mean [95% CI] | Rank mean [95% CI] | 1st | 4th | Win | Deal-in | Riichi | Call | Decisions | p50 / p95 ms | Input bytes avg / max | Escalation | Retries | Jev in / out | GPT in / out |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Agent | Games | Score mean [95% CI] | Rank mean [95% CI] | 1st | 4th | Win | Deal-in | Riichi | Call | Decisions | p50 / p95 ms | Input bytes avg / max | Escalation | Fallback | Error | Retries | Jev in / out | GPT in / out | Total in / out |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 ${rows.join("\n")}
 
 ## Pairwise differences

@@ -5,7 +5,13 @@ import type { LiveDecisionDiagnostics } from "../live/events.js";
 import { canonicalJson, mjaiToMpsz } from "../mjai/tiles.js";
 import { inspectGameDecisionInput } from "../game/input.js";
 import { GptAgent, GptRequestError } from "./gpt.js";
-import { hybridGameDecision, validateHybridThreshold, type HybridTrace } from "./hybrid.js";
+import {
+  DEFAULT_HYBRID_THRESHOLD,
+  hybridGameDecision,
+  parseHybridAgentSpec,
+  validateHybridThreshold,
+  type HybridTrace,
+} from "./hybrid.js";
 import { JevAgent } from "./jev.js";
 import { eventNeedsResponse, responseActor, type MortalConfig, mortalReferencePolicy } from "./mortal.js";
 
@@ -216,7 +222,7 @@ export class HybridGameAgent implements GameAgentWithMetadata {
   lastUsage: { inputTokens?: number; outputTokens?: number } | undefined;
   lastDiagnostics: LiveDecisionDiagnostics | undefined;
 
-  constructor(threshold = 0.75) {
+  constructor(threshold = DEFAULT_HYBRID_THRESHOLD) {
     this.threshold = validateHybridThreshold(threshold);
     this.id = `hybrid@${this.threshold}`;
   }
@@ -525,10 +531,11 @@ export class MortalGameAgent implements GameAgentWithMetadata {
 
 export function createGameAgent(name: string, seed: number, options: GameAgentFactoryOptions = {}): GameAgentWithMetadata {
   const normalized = name.trim();
+  const hybrid = parseHybridAgentSpec(normalized);
+  if (hybrid) return new HybridGameAgent(hybrid.threshold ?? options.hybridThreshold ?? DEFAULT_HYBRID_THRESHOLD);
   if (normalized === "random") return new RandomGameAgent(seed);
   if (normalized === "jev") return new JevGameAgent();
   if (normalized === "gpt") return new GptGameAgent();
-  if (normalized === "hybrid") return new HybridGameAgent(options.hybridThreshold ?? 0.75);
   if (normalized === "mortal") {
     if (!options.mortalConfig) throw new Error("Mortal game agent requires --mortal-config");
     return new MortalGameAgent(options.mortalConfig);

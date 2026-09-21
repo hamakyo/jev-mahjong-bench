@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { DecisionSample } from "../types.js";
@@ -30,6 +31,32 @@ export interface DatasetStats {
   byRound: Record<string, number>;
   legalActionCount: { min: number; max: number; mean: number; distribution: Record<string, number> };
   referencePolicies: Record<string, number>;
+}
+
+export interface DatasetSplitOptions {
+  inputPath: string;
+  calibrationOut: string;
+  evaluationOut: string;
+  ratio: number;
+  seed: number;
+  manifestPath: string;
+}
+
+export interface DatasetSplitManifest {
+  version: 1;
+  inputDatasetSha256: string;
+  calibrationSha256: string;
+  evaluationSha256: string;
+  calibrationSampleCount: number;
+  evaluationSampleCount: number;
+  calibrationGameCount: number;
+  evaluationGameCount: number;
+  calibration: { samples: number; games: number };
+  evaluation: { samples: number; games: number };
+  seed: number;
+  ratio: number;
+  gameIdHashOverlap: boolean;
+  gameIdHashOverlapCount: number;
 }
 
 function increment(map: Record<string, number>, key: string): void {
@@ -142,4 +169,125 @@ export async function writeSamples(path: string, samples: DecisionSample[]): Pro
   await mkdir(dirname(path), { recursive: true });
   const output = samples.map((sample) => canonicalJson(sample)).join("\n") + "\n";
   await writeFile(path, output);
+}
+
+function sha256Bytes(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+async function sha256File(path: string): Promise<string> {
+  return sha256Bytes(await readFile(path));
+}
+
+function splitRandom(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = Math.imul(state ^ (state >>> 16), 0x45d9f3b);
+    state = Math.imul(state ^ (state >>> 16), 0x45d9f3b);
+    state ^= state >>> 16;
+    return (state >>> 0) / 0x1_0000_0000;
+  };
+}
+
+function sampleGameKey(sample: DecisionSample): string {
+  return sample.provenance
+    ? `game/${sample.provenance.gameIdHash}`
+    : `sample/${sample.id}`;
+}
+
+function gameHashes(samples: DecisionSample[]): Set<string> {
+  return new Set(samples.flatMap((sample) => sample.provenance ? [sample.provenance.gameIdHash] : []));
+}
+
+function splitArgumentError(message: string): never {
+  throw new Error(`dataset split ${message}`);
+}
+
+/**
+ * Deterministically split a JSONL dataset at the provenance game boundary.
+ * Samples without provenance are isolated into one group each.
+ */
+export function splitDataset(options: DatasetSplitOptions): Promise<DatasetSplitManifest>;
+export function splitDataset(
+  inputPath: string,
+  calibrationOut: string,
+  evaluationOut: string,
+  ratio: number,
+  seed: number,
+  manifestPath: string,
+): Promise<DatasetSplitManifest>;
+export async function splitDataset(
+  optionsOrInput: DatasetSplitOptions | string,
+  calibrationOut?: string,
+  evaluationOut?: string,
+  ratio?: number,
+  seed?: number,
+  manifestPath?: string,
+): Promise<DatasetSplitManifest> {
+  const options: DatasetSplitOptions = typeof optionsOrInput === "string"
+    ? {
+      inputPath: optionsOrInput,
+      calibrationOut: calibrationOut ?? splitArgumentError("calibration output is required"),
+      evaluationOut: evaluationOut ?? splitArgumentError("evaluation output is required"),
+      ratio: ratio ?? splitArgumentError("ratio is required"),
+      seed: seed ?? splitArgumentError("seed is required"),
+      manifestPath: manifestPath ?? splitArgumentError("manifest path is required"),
+    }
+    : optionsOrInput;
+  if (!Number.isFinite(options.ratio) || options.ratio <= 0 || options.ratio >= 1) {
+    splitArgumentError("ratio must be a finite number between 0 and 1");
+  }
+  if (!Number.isInteger(options.seed)) splitArgumentError("seed must be an integer");
+  const inputBytes = await readFile(options.inputPath);
+  const { samples } = await readDatasetSamples(options.inputPath);
+  const groups = new Map<string, DecisionSample[]>();
+  for (const sample of samples) {
+    const key = sampleGameKey(sample);
+    const current = groups.get(key) ?? [];
+    current.push(sample);
+    groups.set(key, current);
+  }
+  if (groups.size < 2) splitArgumentError("requires at least two game groups");
+
+  const shuffled = [...groups.keys()].sort();
+  const random = splitRandom(options.seed);
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(random() * (index + 1));
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex]!, shuffled[index]!];
+  }
+  const calibrationGroupCount = Math.min(
+    shuffled.length - 1,
+    Math.max(1, Math.floor(shuffled.length * options.ratio)),
+  );
+  const calibrationKeys = new Set(shuffled.slice(0, calibrationGroupCount));
+  const calibration = samples.filter((sample) => calibrationKeys.has(sampleGameKey(sample)));
+  const evaluation = samples.filter((sample) => !calibrationKeys.has(sampleGameKey(sample)));
+  await Promise.all([
+    writeSamples(options.calibrationOut, calibration),
+    writeSamples(options.evaluationOut, evaluation),
+  ]);
+  const calibrationSha256 = await sha256File(options.calibrationOut);
+  const evaluationSha256 = await sha256File(options.evaluationOut);
+  const calibrationHashes = gameHashes(calibration);
+  const evaluationHashes = gameHashes(evaluation);
+  const overlapCount = [...calibrationHashes].filter((hash) => evaluationHashes.has(hash)).length;
+  const manifest: DatasetSplitManifest = {
+    version: 1,
+    inputDatasetSha256: sha256Bytes(inputBytes),
+    calibrationSha256,
+    evaluationSha256,
+    calibrationSampleCount: calibration.length,
+    evaluationSampleCount: evaluation.length,
+    calibrationGameCount: new Set(calibration.map(sampleGameKey)).size,
+    evaluationGameCount: new Set(evaluation.map(sampleGameKey)).size,
+    calibration: { samples: calibration.length, games: new Set(calibration.map(sampleGameKey)).size },
+    evaluation: { samples: evaluation.length, games: new Set(evaluation.map(sampleGameKey)).size },
+    seed: options.seed,
+    ratio: options.ratio,
+    gameIdHashOverlap: overlapCount > 0,
+    gameIdHashOverlapCount: overlapCount,
+  };
+  await mkdir(dirname(options.manifestPath), { recursive: true });
+  await writeFile(options.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  return manifest;
 }

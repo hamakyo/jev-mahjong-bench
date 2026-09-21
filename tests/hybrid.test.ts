@@ -2,8 +2,14 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
-import { evaluateHybridSweep, writeHybridSweep } from "../src/benchmark/hybrid-sweep.js";
-import { hybridGameDecision, runHybridDecision, validateHybridThreshold } from "../src/agents/hybrid.js";
+import {
+  collectHybridCalls,
+  evaluateHybridSweep,
+  evaluateHybridThresholds,
+  readHybridSweepCache,
+  writeHybridSweep,
+} from "../src/benchmark/hybrid-sweep.js";
+import { hybridGameDecision, parseHybridAgentSpec, runHybridDecision, validateHybridThreshold } from "../src/agents/hybrid.js";
 import type { AgentDecision, DecisionSample, GameAction, GameDecisionInput } from "../src/types.js";
 
 const sample: DecisionSample = {
@@ -22,6 +28,13 @@ function decision(action: string, confidence?: number, inputTokens = 1, outputTo
 }
 
 describe("Hybrid decision", () => {
+  it("parses explicit threshold agent names and keeps legacy hybrid spelling", () => {
+    expect(parseHybridAgentSpec("hybrid")).toMatchObject({ explicitThreshold: false });
+    expect(parseHybridAgentSpec("hybrid@0.30")).toMatchObject({ threshold: 0.3, explicitThreshold: true });
+    expect(() => parseHybridAgentSpec("hybrid@1.1")).toThrow();
+    expect(() => parseHybridAgentSpec("hybrid@not-a-number")).toThrow();
+  });
+
   it("accepts only finite thresholds in the closed interval", () => {
     expect(validateHybridThreshold(0)).toBe(0);
     expect(validateHybridThreshold(1)).toBe(1);
@@ -208,5 +221,84 @@ describe("Hybrid threshold sweep", () => {
     expect(JSON.parse(await readFile(join(out, "hybrid-sweep.json"), "utf8")).agreementLabel).toBe("Reference agreement");
     expect(await readFile(join(out, "hybrid-sweep.md"), "utf8")).toContain("Hybrid threshold sweep");
     expect((await readFile(join(out, "decisions.jsonl"), "utf8")).trim().split("\n")).toHaveLength(3);
+  });
+
+  it("separates provider collection from cache-only threshold evaluation", async () => {
+    const samples = [
+      { ...sample, id: "cache-a" },
+      { ...sample, id: "cache-b" },
+    ];
+    let jevCalls = 0;
+    let gptCalls = 0;
+    const cache = await collectHybridCalls(samples, {
+      jev: { decide: async () => { jevCalls += 1; return decision("a", 0.5, 4, 2); } },
+      gpt: { decide: async () => { gptCalls += 1; return decision("b", undefined, 8, 3); } },
+    }, {
+      models: {
+        jev: { model: "jev-test", reasoningEffort: "default" },
+        gpt: { model: "gpt-test", reasoningEffort: "low" },
+      },
+    });
+    expect(jevCalls).toBe(2);
+    expect(gptCalls).toBe(2);
+    const result = evaluateHybridThresholds(samples, cache, [0.5, 0.75], {
+      models: {
+        jev: { model: "jev-test", reasoningEffort: "default" },
+        gpt: { model: "gpt-test", reasoningEffort: "low" },
+      },
+    });
+    expect(jevCalls).toBe(2);
+    expect(gptCalls).toBe(2);
+    expect(result.thresholdResults[0]).toMatchObject({
+      finalSourceCounts: { jev: 2, gpt: 0, "jev-fallback": 0, error: 0 },
+      jevInputTokens: 8,
+      gptInputTokens: 0,
+      totalTokens: 12,
+    });
+    expect(result.thresholdResults[1]).toMatchObject({
+      finalSourceCounts: { jev: 0, gpt: 2, "jev-fallback": 0, error: 0 },
+      jevInputTokens: 8,
+      gptInputTokens: 16,
+      totalTokens: 34,
+    });
+    expect(result.usage.physical).toMatchObject({ jevCalls: 2, gptCalls: 2, inputTokens: 24, outputTokens: 10 });
+    expect(result.usage.estimatedByThreshold["0.5"]).toMatchObject({ jevCalls: 2, gptCalls: 0 });
+    expect(result.cache?.calls).toHaveLength(2);
+
+    const out = await mkdtemp(join(tmpdir(), "jev-hybrid-cache-"));
+    await writeHybridSweep(out, result);
+    const loaded = await readHybridSweepCache(join(out, "provider-calls.jsonl"));
+    expect(loaded.datasetSha256).toBe(cache.datasetSha256);
+    expect(loaded.calls[0]?.jev.confidence).toBe(0.5);
+    expect(() => evaluateHybridThresholds(samples.map((item) => ({ ...item, legalActions: ["a", "b", "c"] })), cache, [0.5])).toThrow(/legal actions hash mismatch/);
+    expect(() => evaluateHybridThresholds(samples, cache, [0.5], { datasetSha256: "wrong" })).toThrow(/dataset SHA-256 mismatch/);
+  });
+
+  it("separates valid Jev confidence distribution buckets and invalid categories", async () => {
+    const confidences: Array<number | undefined> = [0, 0.1, 0.25, 0.5, 0.75, 1, undefined, Number.NaN, -0.1, 1.1];
+    const samples = confidences.map((_, index) => ({ ...sample, id: `distribution-${index}` }));
+    const cache = await collectHybridCalls(samples, {
+      jev: { decide: async (value) => {
+        const index = Number(value.id.split("-").at(-1));
+        if (index === 9) return decision("illegal", confidences[index]!);
+        const confidence = confidences[index!];
+        return confidence === undefined ? decision("a") : decision("a", confidence);
+      } },
+      gpt: { decide: async () => decision("b") },
+    });
+    const result = evaluateHybridThresholds(samples, cache, [0.5]);
+    expect(result.confidenceDistribution).toMatchObject({
+      min: 0,
+      median: 0.375,
+      max: 1,
+      validConfidenceCount: 6,
+      missingConfidenceCount: 1,
+      nonFiniteConfidenceCount: 1,
+      outOfRangeConfidenceCount: 2,
+      illegalJevActionCount: 1,
+    });
+    expect(result.confidenceDistribution.histogram["0.0-0.1"]).toBe(1);
+    expect(result.confidenceDistribution.histogram["0.1-0.2"]).toBe(1);
+    expect(Object.values(result.confidenceDistribution.histogram).reduce((sum, value) => sum + value, 0)).toBe(6);
   });
 });

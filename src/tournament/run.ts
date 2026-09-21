@@ -11,6 +11,7 @@ import type {
 } from "../types.js";
 import { canonicalJson } from "../mjai/tiles.js";
 import { createGameAgent, type GameAgentWithMetadata } from "../agents/game.js";
+import { DEFAULT_HYBRID_THRESHOLD, parseHybridAgentSpec } from "../agents/hybrid.js";
 import { mortalReferencePolicy, type MortalConfig } from "../agents/mortal.js";
 import { aggregateTournament, renderTournamentMarkdown, type TournamentMetrics } from "./metrics.js";
 import { extractGameOutcomes } from "./outcomes.js";
@@ -62,7 +63,35 @@ function fileToken(value: string): string {
 }
 
 function effectiveHybridThreshold(options: TournamentOptions): number | undefined {
-  return options.hybridThreshold ?? (options.seats.includes("hybrid") ? 0.75 : undefined);
+  return options.hybridThreshold ?? (options.seats.some((seat) => seat.trim() === "hybrid") ? DEFAULT_HYBRID_THRESHOLD : undefined);
+}
+
+interface HybridTournamentAgentMetadata {
+  seat: number;
+  requestedAgent: string;
+  agentId: string;
+  threshold: number;
+  settingsSha256: string;
+}
+
+function hybridTournamentAgents(options: TournamentOptions): HybridTournamentAgentMetadata[] {
+  const fallback = effectiveHybridThreshold(options) ?? DEFAULT_HYBRID_THRESHOLD;
+  return options.seats.flatMap((requestedAgent, seat) => {
+    const spec = parseHybridAgentSpec(requestedAgent.trim());
+    if (!spec) return [];
+    const threshold = spec.threshold ?? fallback;
+    const agentId = `hybrid@${threshold}`;
+    const settings = {
+      requestedAgent,
+      agentId,
+      threshold,
+      jevModel: process.env.TYPESAFE_MODEL ?? "system-one",
+      jevReasoningEffort: process.env.TYPESAFE_REASONING_EFFORT ?? "default",
+      gptModel: process.env.OPENAI_MODEL ?? "gpt-5.6-luna",
+      gptReasoningEffort: process.env.OPENAI_REASONING_EFFORT ?? "none",
+    };
+    return [{ seat, requestedAgent, agentId, threshold, settingsSha256: sha256(canonicalJson(settings)) }];
+  });
 }
 
 export function rotateSeats(seats: string[], rotationIndex: number): string[] {
@@ -646,10 +675,12 @@ function validateOptions(options: TournamentOptions): void {
   if (options.hybridThreshold !== undefined && (!Number.isFinite(options.hybridThreshold) || options.hybridThreshold < 0 || options.hybridThreshold > 1)) {
     throw new Error("--hybrid-threshold must be a finite number between 0 and 1");
   }
+  for (const seat of options.seats) parseHybridAgentSpec(seat.trim());
 }
 
 function modelMetadata(options: TournamentOptions, mortalPolicy: Record<string, unknown> | undefined): Record<string, unknown> {
   const hybridThreshold = effectiveHybridThreshold(options);
+  const hybridAgents = hybridTournamentAgents(options);
   return {
     jev: {
       provider: "typesafe",
@@ -661,6 +692,7 @@ function modelMetadata(options: TournamentOptions, mortalPolicy: Record<string, 
       reasoningEffort: process.env.OPENAI_REASONING_EFFORT ?? "none",
     },
     ...(hybridThreshold !== undefined ? { hybridThreshold } : {}),
+    ...(hybridAgents.length ? { hybridAgents } : {}),
     ...(mortalPolicy ? { mortal: mortalPolicy } : {}),
   };
 }
@@ -741,6 +773,7 @@ export async function runTournament(options: TournamentOptions, runtime: Tournam
       timeoutMs: options.timeoutMs,
       requestedSeats: options.seats,
       ...(hybridThreshold !== undefined ? { hybridThreshold } : {}),
+      ...(hybridTournamentAgents(options).length ? { hybridAgents: hybridTournamentAgents(options) } : {}),
     };
     const dependencies = { riichienv: "0.4.10", node: process.version };
     const models = modelMetadata(options, mortalPolicy);

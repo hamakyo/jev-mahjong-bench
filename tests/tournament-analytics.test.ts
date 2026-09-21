@@ -5,6 +5,21 @@ import { buildTournamentSchedule } from "../src/tournament/run.js";
 import type { SeatGameResult, TournamentGameResult } from "../src/types.js";
 
 describe("paired tournament schedule", () => {
+  it("keeps explicit Hybrid thresholds as distinct seat identities", () => {
+    const schedule = buildTournamentSchedule({
+      seats: ["jev", "gpt", "hybrid@0.30", "hybrid@0.40"],
+      pairedRuns: 1,
+      mode: "4p-red-half",
+      rule: "tenhou",
+      seed: 42,
+      seatPolicy: "rotate",
+      out: "results/test",
+      timeoutMs: 100,
+    });
+    expect(new Set(schedule.flatMap((game) => game.seats.filter((seat) => seat.startsWith("hybrid@"))))).toEqual(new Set(["hybrid@0.30", "hybrid@0.40"]));
+    expect(new Set(schedule.map((game) => game.gameId)).size).toBe(schedule.length);
+  });
+
   it("runs every unique circular rotation with the same base seed", () => {
     const options = {
       seats: ["jev", "gpt", "mortal", "random"],

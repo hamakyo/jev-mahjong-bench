@@ -141,7 +141,7 @@ should not be redistributed without checking those terms.
 ## CLI
 
 ```text
---agents <list>       jev,gpt,hybrid,mortal,random
+--agents <list>       jev,gpt,hybrid,hybrid@0.30,mortal,random
 --dataset <path>      JSONL dataset
 --out <dir>           report directory
 --concurrency <n>     concurrent decisions per agent (default: 1)
@@ -318,6 +318,19 @@ It also contains per-seat outcomes, Wilson rate intervals, pair-block score and
 rank intervals, and pairwise differences. `tournament.md` is the compact human
 comparison. Latency and token usage remain in the raw game and decision logs.
 
+Multiple Hybrid thresholds can occupy separate seats in the same paired game:
+
+```bash
+pnpm tournament -- \
+  --seats jev,gpt,hybrid@0.30,hybrid@0.40 \
+  --paired-runs 25 \
+  --mode 4p-red-half --rule tenhou --seed 42 \
+  --out results/hybrid-calibration
+```
+
+`hybrid@<threshold>` is included in the agent ID and tournament configuration
+hash. The legacy `hybrid` seat still uses `--hybrid-threshold` (default `0.75`).
+
 ### Jev confidence Hybrid
 
 Hybrid calls Jev first. A legal Jev action with confidence at or above the
@@ -334,15 +347,42 @@ pnpm bench -- \
 
 pnpm hybrid:sweep -- \
   --dataset datasets/tenhou-mortal.jsonl \
-  --thresholds 0.50,0.65,0.75,0.85,0.95 \
   --out results/hybrid-sweep
+
+# Reuse provider-calls.jsonl without making provider calls again.
+pnpm hybrid:sweep -- \
+  --dataset datasets/tenhou-mortal.jsonl \
+  --cache-in results/hybrid-sweep/provider-calls.jsonl \
+  --thresholds 0.10,0.60,0.70 \
+  --out results/hybrid-sweep-re-eval
 ```
 
 The sweep calls Jev and GPT exactly once per sample to produce same-sample
 baselines, then derives every threshold result from those cached responses.
 Threshold latency and token metrics count GPT only for decisions escalated by
-that threshold, while `usage` records the full sweep execution cost. It writes
-`hybrid-sweep.json`, `hybrid-sweep.md`, and raw per-sample `decisions.jsonl`.
+that threshold, while `usage.physical` records the full collection cost and
+`usage.estimatedByThreshold` records per-threshold usage. The default candidates
+are `0.20,0.25,0.30,0.35,0.40,0.50`; `hybrid-sweep.json` includes confidence
+distribution, provider-specific metrics, fallback/error reasons, and a Pareto
+frontier. It writes `provider-calls.jsonl`, `hybrid-sweep.json`,
+`hybrid-sweep.md`, and raw per-sample `decisions.jsonl`.
+
+Split calibration and evaluation data by provenance game rather than by sample:
+
+```bash
+pnpm dataset:split -- \
+  --dataset datasets/mortal-reference.jsonl \
+  --calibration-out datasets/calibration.jsonl \
+  --evaluation-out datasets/evaluation.jsonl \
+  --ratio 0.7 --seed 42 --manifest datasets/split.json
+```
+
+The manifest records input/output SHA-256 values, sample/game counts, and the
+assertion that no `gameIdHash` occurs in both split.
+
+For a held-out study, run the full threshold sweep on calibration data, choose
+at least two Pareto candidates before opening evaluation data, then evaluate
+only those candidates. Do not retune the threshold from the held-out results.
 
 ## Fair-comparison rules
 

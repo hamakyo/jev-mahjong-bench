@@ -10,6 +10,27 @@ import { JevAgent } from "./jev.js";
 import type { MahjongAgent } from "./agent.js";
 import { inspectGameDecisionInput } from "../game/input.js";
 
+export const DEFAULT_HYBRID_THRESHOLD = 0.75;
+
+export interface HybridAgentSpec {
+  name: "hybrid";
+  threshold?: number;
+  explicitThreshold: boolean;
+}
+
+/** Parse the public agent spelling used by both benchmark and tournament CLIs. */
+export function parseHybridAgentSpec(value: string): HybridAgentSpec | undefined {
+  if (value === "hybrid") return { name: "hybrid", explicitThreshold: false };
+  if (!value.startsWith("hybrid@")) return undefined;
+  const rawThreshold = value.slice("hybrid@".length);
+  if (!rawThreshold) throw new Error(`Invalid hybrid agent "${value}"; expected hybrid@<threshold>`);
+  const threshold = Number(rawThreshold);
+  if (!Number.isFinite(threshold)) {
+    throw new Error(`Invalid hybrid agent "${value}"; threshold must be a finite number`);
+  }
+  return { name: "hybrid", threshold: validateHybridThreshold(threshold), explicitThreshold: true };
+}
+
 export interface HybridProviderRecord {
   action?: string;
   confidence: number | null;
@@ -328,7 +349,7 @@ export class HybridAgent implements MahjongAgent {
   private readonly jev: JevAgent;
   private readonly gpt: GptAgent;
 
-  constructor(threshold = 0.75, jev?: JevAgent, gpt?: GptAgent) {
+  constructor(threshold = DEFAULT_HYBRID_THRESHOLD, jev?: JevAgent, gpt?: GptAgent) {
     this.threshold = validateHybridThreshold(threshold);
     this.id = `hybrid@${this.threshold}`;
     this.jev = jev ?? new JevAgent();

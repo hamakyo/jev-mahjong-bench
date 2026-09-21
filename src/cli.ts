@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAgents } from "./agents/registry.js";
@@ -7,12 +8,19 @@ import { GptAgent } from "./agents/gpt.js";
 import { JevAgent } from "./agents/jev.js";
 import { loadMortalConfig } from "./agents/mortal.js";
 import { loadDataset } from "./benchmark/dataset.js";
-import { datasetStats, validateDataset, writeStats } from "./benchmark/dataset-tools.js";
-import { evaluateHybridSweep, writeHybridSweep } from "./benchmark/hybrid-sweep.js";
+import { datasetStats, splitDataset, validateDataset, writeStats } from "./benchmark/dataset-tools.js";
+import {
+  collectHybridCalls,
+  DEFAULT_HYBRID_THRESHOLDS,
+  evaluateHybridThresholds,
+  readHybridSweepCache,
+  writeHybridSweep,
+} from "./benchmark/hybrid-sweep.js";
 import { addMortalReferences } from "./benchmark/reference-mortal.js";
 import { summarize } from "./benchmark/metrics.js";
 import { writeReport, type ReferencePolicyCount } from "./benchmark/report.js";
 import { runAgent } from "./benchmark/run.js";
+import { DEFAULT_HYBRID_THRESHOLD } from "./agents/hybrid.js";
 import { runTournament, type TournamentOptions } from "./tournament/run.js";
 import { LiveEventHub } from "./live/hub.js";
 import { SnapshotStore } from "./live/snapshot.js";
@@ -64,7 +72,7 @@ async function runBench(argv: string[]): Promise<void> {
   const mortalConfig = flags["mortal-config"] ? await loadMortalConfig(resolve(flags["mortal-config"]!)) : undefined;
   const effectiveConcurrency = agentNames.includes("mortal") ? 1 : concurrency;
   const hybridThreshold = flags["hybrid-threshold"] === undefined
-    ? 0.75
+    ? DEFAULT_HYBRID_THRESHOLD
     : Number.parseFloat(flags["hybrid-threshold"]!);
   if (!Number.isFinite(hybridThreshold) || hybridThreshold < 0 || hybridThreshold > 1) {
     throw new Error("--hybrid-threshold must be a finite number between 0 and 1");
@@ -185,6 +193,20 @@ async function runDatasetStats(argv: string[]): Promise<void> {
   console.log(JSON.stringify(stats, null, 2));
 }
 
+async function runDatasetSplit(argv: string[]): Promise<void> {
+  const flags = parseFlags(argv);
+  const ratio = flags.ratio === undefined ? 0.7 : Number.parseFloat(flags.ratio);
+  const manifest = await splitDataset({
+    inputPath: resolve(required(flags, "dataset")),
+    calibrationOut: resolve(required(flags, "calibration-out")),
+    evaluationOut: resolve(required(flags, "evaluation-out")),
+    ratio,
+    seed: integer(flags, "seed", 42),
+    manifestPath: resolve(required(flags, "manifest")),
+  });
+  console.log(JSON.stringify(manifest, null, 2));
+}
+
 async function runReferenceMortal(argv: string[]): Promise<void> {
   const flags = parseFlags(argv);
   const result = await addMortalReferences(required(flags, "dataset"), required(flags, "out"), required(flags, "config"));
@@ -193,15 +215,54 @@ async function runReferenceMortal(argv: string[]): Promise<void> {
 
 async function runHybridSweep(argv: string[]): Promise<void> {
   const flags = parseFlags(argv);
-  const samples = await loadDataset(resolve(required(flags, "dataset")));
-  const thresholds = required(flags, "thresholds").split(",").map((value) => Number.parseFloat(value.trim()));
+  const datasetPath = resolve(required(flags, "dataset"));
+  const samples = await loadDataset(datasetPath);
+  const thresholds = (flags.thresholds === undefined
+    ? [...DEFAULT_HYBRID_THRESHOLDS]
+    : flags.thresholds.split(",").map((value) => Number.parseFloat(value.trim())));
   if (thresholds.some((value) => !Number.isFinite(value) || value < 0 || value > 1)) {
     throw new Error("--thresholds must be comma-separated finite numbers between 0 and 1");
   }
-  const jev = new JevAgent();
-  const gpt = new GptAgent();
-  const result = await evaluateHybridSweep(samples, thresholds, { jev, gpt });
-  await writeHybridSweep(resolve(required(flags, "out")), result);
+  const datasetSha256 = createHash("sha256").update(await readFile(datasetPath)).digest("hex");
+  const models = {
+    jev: {
+      model: process.env.TYPESAFE_MODEL ?? "system-one",
+      reasoningEffort: process.env.TYPESAFE_REASONING_EFFORT ?? "default",
+    },
+    gpt: {
+      model: process.env.OPENAI_MODEL ?? "gpt-5.6-luna",
+      reasoningEffort: process.env.OPENAI_REASONING_EFFORT ?? "none",
+    },
+  };
+  const inputCost = flags["gpt-input-cost-per-1k"] === undefined
+    ? undefined : Number.parseFloat(flags["gpt-input-cost-per-1k"]!);
+  const outputCost = flags["gpt-output-cost-per-1k"] === undefined
+    ? undefined : Number.parseFloat(flags["gpt-output-cost-per-1k"]!);
+  const cost = inputCost === undefined && outputCost === undefined ? undefined : {
+    ...(inputCost !== undefined ? { gptInputPer1kTokens: inputCost } : {}),
+    ...(outputCost !== undefined ? { gptOutputPer1kTokens: outputCost } : {}),
+  };
+  const cacheIn = flags["cache-in"];
+  let cache;
+  let result;
+  if (cacheIn) {
+    cache = await readHybridSweepCache(resolve(cacheIn));
+    result = evaluateHybridThresholds(samples, cache, thresholds, {
+      datasetSha256,
+      models,
+      ...(cost ? { cost } : {}),
+    });
+  } else {
+    const jev = new JevAgent();
+    const gpt = new GptAgent();
+    cache = await collectHybridCalls(samples, { jev, gpt }, { datasetSha256, models });
+    result = evaluateHybridThresholds(samples, cache, thresholds, {
+      datasetSha256,
+      models,
+      ...(cost ? { cost } : {}),
+    });
+  }
+  await writeHybridSweep(resolve(required(flags, "out")), result, cache);
   console.log(JSON.stringify({ thresholds: result.thresholds, samples: result.totalSamples, usage: result.usage }, null, 2));
 }
 
@@ -217,9 +278,9 @@ async function tournamentOptionsFromFlags(flags: Flags): Promise<TournamentOptio
   const hasPairedRuns = flags["paired-runs"] !== undefined;
   if (hasGames && hasPairedRuns) throw new Error("--games and --paired-runs are mutually exclusive");
   const hybridThreshold = flags["hybrid-threshold"] === undefined
-    ? 0.75
+    ? (seats.some((seat) => seat === "hybrid") ? DEFAULT_HYBRID_THRESHOLD : undefined)
     : Number.parseFloat(flags["hybrid-threshold"]!);
-  if (!Number.isFinite(hybridThreshold) || hybridThreshold < 0 || hybridThreshold > 1) {
+  if (hybridThreshold !== undefined && (!Number.isFinite(hybridThreshold) || hybridThreshold < 0 || hybridThreshold > 1)) {
     throw new Error("--hybrid-threshold must be a finite number between 0 and 1");
   }
   const options: TournamentOptions = {
@@ -231,7 +292,7 @@ async function tournamentOptionsFromFlags(flags: Flags): Promise<TournamentOptio
     seatPolicy: (flags["seat-policy"] ?? "rotate") as "rotate" | "fixed",
     out: required(flags, "out"),
     timeoutMs: integer(flags, "timeout-ms", 60_000),
-    hybridThreshold,
+    ...(hybridThreshold !== undefined ? { hybridThreshold } : {}),
     ...(mortalConfig ? { mortalConfig } : {}),
   };
   return options;
@@ -332,6 +393,7 @@ async function main(): Promise<void> {
   if (command === "dataset:import") return runDatasetImport(argv.slice(1));
   if (command === "dataset:validate") return runDatasetValidate(argv.slice(1));
   if (command === "dataset:stats") return runDatasetStats(argv.slice(1));
+  if (command === "dataset:split") return runDatasetSplit(argv.slice(1));
   if (command === "reference:mortal") return runReferenceMortal(argv.slice(1));
   if (command === "tournament") return runTournamentCommand(argv.slice(1));
   if (command === "tournament:watch") return runTournamentWatchCommand(argv.slice(1));
