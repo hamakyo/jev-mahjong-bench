@@ -292,6 +292,9 @@ manifestには入力・出力datasetのSHA-256、sample/game数、seed、ratio�
 held-out評価では、まずcalibration setで全thresholdをsweepし、evaluation setを
 見る前にPareto frontierから少なくとも2候補を選びます。その後は選択済み候補
 だけをevaluation setで評価し、結果を見てthresholdを再調整しません。
+実測の順序、dataset SHA-256、事前選択した2候補、held-out指標、paired完全対局の
+結果は [校正記録](docs/hybrid-calibration.md) に固定しています。今回は同梱toy
+fixtureのため、production defaultは変更していません。
 
 ## 公平性と対象範囲
 

@@ -383,6 +383,10 @@ assertion that no `gameIdHash` occurs in both split.
 For a held-out study, run the full threshold sweep on calibration data, choose
 at least two Pareto candidates before opening evaluation data, then evaluate
 only those candidates. Do not retune the threshold from the held-out results.
+The checked-in [calibration record](docs/hybrid-calibration.md) shows this order
+with dataset hashes, two preselected candidates, held-out metrics, and paired
+full-game results; the bundled toy fixture is explicitly not enough to change
+the production default.
 
 ## Fair-comparison rules
 
