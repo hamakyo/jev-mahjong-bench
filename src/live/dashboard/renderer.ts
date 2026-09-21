@@ -2,6 +2,7 @@
  * Browser-side renderers shared by the live and offline replay dashboards.
  * Both dashboards are served as standalone JavaScript assembled by Node.
  */
+import { tileCatalogRuntimeJs } from "./tiles.js";
 export const decisionTableRendererJs = String.raw`
   function renderDecisionTable(snapshot, mode) {
     const node = $("decisions");
@@ -28,26 +29,59 @@ export const decisionTableRendererJs = String.raw`
 `;
 
 export const tableStateRendererJs = String.raw`
-  function renderTableState(snapshot, mode) {
+${tileCatalogRuntimeJs}
+  const tablePositions = ["top", "left", "right", "bottom"];
+  const tableRotations = { bottom: "0deg", right: "90deg", top: "180deg", left: "-90deg" };
+  const tileSortValue = (value) => {
+    const text = String(value || "");
+    const match = /^(0|[1-9])([mps])(?:r)?$/.exec(text);
+    if (match) return ({ m: 0, p: 10, s: 20 }[match[2]] || 0) + (Number(match[1]) === 0 ? 5.1 : Number(match[1]) + (/r$/.test(text) ? 0.1 : 0));
+    return /^[1-7]z$/.test(text) ? 30 + Number(text[0]) : 99;
+  };
+  const sortedHand = (values) => (Array.isArray(values) ? values : []).map((value, index) => ({ value, index })).sort((left, right) => tileSortValue(left.value) - tileSortValue(right.value) || left.index - right.index).map((entry) => entry.value);
+  const assetTile = (value, className, ariaLabel) => {
+    const text = String(value || "?");
+    const asset = text === "Back.svg" ? "Back.svg" : tileAssetFilename(text);
+    return '<span class="tile-image ' + (className || '') + '"' + (ariaLabel ? ' aria-label="' + escapeHtml(ariaLabel) + '"' : '') + '><img src="/assets/tiles/' + encodeURIComponent(asset) + '" alt="' + escapeHtml(ariaLabel || text) + '" decoding="async"></span>';
+  };
+  const hiddenHand = (count) => Array.from({ length: Math.max(0, Number(count) || 0) }, () => assetTile("Back.svg", "concealed", localeRuntime.t("table.concealed"))).join("") || '<span class="muted">—</span>';
+  const visibleHand = (seat, mode) => {
+    if (mode !== "debug" || !Array.isArray(seat.debugHand)) return hiddenHand(seat.concealedTileCount);
+    const drawn = seat.debugDrawnTile;
+    const hand = sortedHand(seat.debugHand);
+    const drawnIndex = drawn ? hand.lastIndexOf(drawn) : -1;
+    if (drawnIndex >= 0) hand.splice(drawnIndex, 1);
+    return hand.map((tile) => assetTile(tile, "face", tile)).join("") + (drawn ? '<span class="draw-gap">' + assetTile(drawn, "face drawn", drawn) + '</span>' : '') || hiddenHand(seat.concealedTileCount);
+  };
+  const renderMeld = (meld) => (meld.tiles || []).map((tile, index) => assetTile((meld.concealedIndexes || []).includes(index) ? "Back.svg" : tile, (meld.calledTileIndex === index ? "called" : "face"), meld.concealedIndexes?.includes(index) ? "concealed meld tile" : tile)).join("");
+  const renderRiver = (seat, snapshot, mode) => (seat.river || []).map((riverTile, index) => {
+    const latest = snapshot.table?.latestDiscard?.playerIndex === seat.playerIndex && snapshot.table?.latestDiscard?.riverIndex === index;
+    const classes = [riverTile.riichi ? "riichi-discard" : "", latest ? "latest-discard" : ""].filter(Boolean).join(" ");
+    const translated = localeRuntime.t("table.latestDiscard");
+    return assetTile(riverTile.tile, classes, latest ? translated + ": " + riverTile.tile : riverTile.tile);
+  }).join("") || '<span class="muted">—</span>';
+  const seatFallback = (snapshot, player) => {
+    const position = tablePositions.find((candidate) => candidate === ["bottom", "right", "top", "left"][player]);
+    const wind = ["E", "S", "W", "N"][player];
+    return { playerIndex: player, position, agentId: snapshot.seatAgents?.[wind] || "—", currentWind: wind, isDealer: snapshot.oya === player, score: snapshot.scores?.[player] || 0, rank: snapshot.ranks?.[player], concealedTileCount: 0, drawnTilePending: false, river: [], melds: [], riichi: false };
+  };
+  function renderMahjongTable(snapshot, mode) {
+    const root = $("mahjong-table");
+    if (!root) return;
     const label = (key, params) => localeRuntime.t(key, params);
-    const tile = (value) => {
-      const text = String(value ?? "?");
-      const known = /^[0-9][mps]$/.test(text) || /^[1-7]z$/.test(text);
-      return '<span class="tile ' + (known ? '' : 'unknown') + '">' + escapeHtml(text) + '</span>';
-    };
-    const tileList = (values) => (Array.isArray(values) ? values : []).map(tile).join("") || '<span class="muted">—</span>';
-    const scoreNode = $("scores");
-    if (scoreNode) scoreNode.innerHTML = seats.map((seat, index) => '<div class="score ' + (snapshot.currentSeat === index ? 'current' : '') + '"><span><b class="seat">' + escapeHtml(localeRuntime.formatSeat(seat)) + '</b> ' + escapeHtml(snapshot.seatAgents?.[seat] || '—') + '<br><small>' + label('table.rank') + ' ' + escapeHtml(snapshot.ranks?.[index] ?? '—') + '</small></span><strong>' + escapeHtml(snapshot.scores?.[index] ?? '—') + '</strong></div>').join("");
-    const renderBySeat = (id, values, formatter) => {
-      const node = $(id);
-      if (!node) return;
-      node.innerHTML = seats.map((seat) => '<div><div class="seat">' + escapeHtml(localeRuntime.formatSeat(seat)) + (snapshot.riichi?.[seat] ? ' · ' + label('table.riichi') : '') + '</div>' + formatter(values?.[seat] || []) + '</div>').join("");
-    };
-    renderBySeat("discards", snapshot.discards, (values) => '<div class="tiles">' + tileList(values) + '</div>');
-    renderBySeat("melds", snapshot.melds, (values) => values.length ? values.map((value) => '<span class="meld">' + escapeHtml(value) + '</span>').join("") : '<span class="muted">—</span>');
-    const dora = $("dora");
-    if (dora) dora.innerHTML = tileList(snapshot.doraIndicators);
-    const events = $("events");
-    if (events) events.innerHTML = (snapshot.recentEvents || []).slice(-8).reverse().map((event) => { const rawType = event.type || 'unknown'; const translated = localeRuntime.formatActionType(rawType); const display = mode === 'debug' && translated !== rawType ? translated + ' (' + rawType + ')' : translated; return '<div>' + escapeHtml(display) + (event.actor == null ? '' : ' · ' + escapeHtml(localeRuntime.formatSeat(seats[event.actor] || event.actor))) + '</div>'; }).join('') || '<span class="muted">' + label('table.noEvents') + '</span>';
+    const seatMap = snapshot.table?.seats || {};
+    const seatsForPosition = Object.fromEntries(tablePositions.map((position) => [position, seatMap[position] || seatFallback(snapshot, ["top", "left", "right", "bottom"].indexOf(position))]));
+    const central = '<div class="table-center"><div class="center-round">' + escapeHtml(localeRuntime.formatRound(snapshot.round)) + '</div><div class="center-meta"><span>' + label("table.honba") + ' ' + escapeHtml(snapshot.honba ?? 0) + '</span><span>' + label("table.kyotaku") + ' ' + escapeHtml(snapshot.kyotaku ?? 0) + '</span></div><div class="center-dora"><span>' + label("table.dora") + '</span><div class="center-dora-tiles">' + (snapshot.doraIndicators || []).map((tile) => assetTile(tile, "face", tile)).join("") + '</div></div><div class="center-turn">' + label("table.dealer") + ': ' + escapeHtml(localeRuntime.formatSeat(snapshot.oya)) + ' · ' + label("table.currentTurn") + ': ' + escapeHtml(localeRuntime.formatSeat(snapshot.currentSeat)) + '</div></div>';
+    const zones = tablePositions.map((position) => {
+      const seat = seatsForPosition[position];
+      const current = seat.playerIndex === snapshot.currentSeat;
+      const dealer = seat.isDealer;
+      const labels = '<div class="seat-labels"><strong>' + escapeHtml(seat.agentId) + '</strong><span>' + escapeHtml(localeRuntime.formatSeat(seat.currentWind)) + (dealer ? ' · ' + label("table.dealer") : '') + '</span><span>' + escapeHtml(String(seat.score)) + (seat.rank == null ? '' : ' · ' + label("table.rank") + ' ' + escapeHtml(String(seat.rank))) + '</span></div>';
+      const tiles = '<div class="oriented-frame" style="--seat-rotation:' + tableRotations[position] + '"><div class="oriented-tiles"><div class="table-hand" aria-label="' + escapeHtml(label("table.hand")) + '">' + visibleHand(seat, mode) + '</div><div class="table-melds" aria-label="' + escapeHtml(label("table.melds")) + '">' + (seat.melds || []).map(renderMeld).join('<span class="meld-gap"></span>') + '</div><div class="river" aria-label="' + escapeHtml(label("table.discards")) + '">' + renderRiver(seat, snapshot, mode) + '</div></div></div>';
+      return '<div class="seat-zone position-' + position + (current ? ' current-actor' : '') + (dealer ? ' dealer' : '') + '" data-player-index="' + seat.playerIndex + '">' + labels + tiles + '</div>';
+    }).join("");
+    root.innerHTML = zones + central;
+    root.setAttribute("aria-label", label("table.mahjongTable"));
   }
+  function renderTableState(snapshot, mode) { renderMahjongTable(snapshot, mode); }
 `;

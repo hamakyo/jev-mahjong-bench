@@ -43,20 +43,15 @@ export const dashboardHtml = `<!doctype html>
         </div>
         <p id="control-error" class="error"></p>
       </section>
-      <section>
-        <h2 data-i18n="table.scores">Scores</h2>
-        <div id="scores" class="score-grid"></div>
+      <section class="table-section">
+        <h2 data-i18n="table.mahjongTable">Mahjong table</h2>
+        <div id="mahjong-table" class="mahjong-table"></div>
       </section>
       <section>
         <h2 data-i18n="sections.liveMetrics">Live metrics</h2>
         <div id="metrics" class="table-wrap"></div>
       </section>
-      <section class="board-grid">
-        <article><h2 data-i18n="table.discards">Discards</h2><div id="discards"></div></article>
-        <article><h2 data-i18n="table.melds">Melds</h2><div id="melds"></div></article>
-        <article><h2 data-i18n="table.dora">Dora</h2><div id="dora" class="tiles"></div><div id="events" class="muted"></div></article>
-        <article><h2 data-i18n="sections.liveAgents">Live agents</h2><div id="agents"></div></article>
-      </section>
+      <section><h2 data-i18n="sections.liveAgents">Live agents</h2><div id="agents"></div></section>
       <section>
         <h2 data-i18n="sections.recentDecisions">Recent decisions</h2>
         <div id="decisions" class="table-wrap"></div>
@@ -120,8 +115,38 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .mode.debug { background: #875e29; }
 .debug-section pre { max-height: 38rem; overflow: auto; white-space: pre-wrap; word-break: break-word; color: #c6d3df; }
 .error { color: #ff9c9c; }
+.table-section { overflow: hidden; }
+.mahjong-table { display: grid; grid-template-columns: minmax(0, 1fr) minmax(14rem, 1.25fr) minmax(0, 1fr); grid-template-rows: minmax(10rem, 1fr) minmax(8rem, .8fr) minmax(10rem, 1fr); grid-template-areas: "top top top" "left center right" "bottom bottom bottom"; gap: .6rem; min-height: 38rem; padding: .75rem; border-radius: .75rem; background: radial-gradient(circle, #1f684e, #124033 70%); border: .5rem solid #6f4c2b; box-shadow: inset 0 0 0 .25rem #9a6a39; }
+.table-center { grid-area: center; align-self: center; justify-self: stretch; display: grid; gap: .45rem; padding: .8rem; border-radius: .6rem; background: rgba(9, 28, 26, .82); border: 1px solid rgba(255,255,255,.2); text-align: center; }
+.center-round { font-size: clamp(1rem, 2vw, 1.45rem); font-weight: 800; }
+.center-meta, .center-turn { display: flex; justify-content: center; flex-wrap: wrap; gap: .75rem; color: #c6d3df; font-size: .8rem; }
+.center-dora { display: grid; gap: .25rem; justify-items: center; color: #e1b866; font-size: .8rem; }
+.center-dora-tiles { display: flex; justify-content: center; gap: .2rem; }
+.seat-zone { min-width: 0; display: grid; gap: .35rem; align-content: center; justify-items: center; padding: .35rem; border: 1px solid transparent; border-radius: .55rem; }
+.seat-zone.position-top { grid-area: top; }
+.seat-zone.position-left { grid-area: left; }
+.seat-zone.position-right { grid-area: right; }
+.seat-zone.position-bottom { grid-area: bottom; }
+.seat-zone.current-actor { border-color: #e1b866; box-shadow: 0 0 0 .12rem rgba(225,184,102,.25); }
+.seat-zone.dealer .seat-labels { color: #ffe0a0; }
+.seat-labels { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: .4rem; min-width: 0; color: #f3f6f8; font-size: .8rem; text-align: center; }
+.seat-labels > * { overflow-wrap: anywhere; }
+.oriented-frame { width: min(100%, 30rem); min-height: 7rem; display: flex; align-items: center; justify-content: center; transform: rotate(var(--seat-rotation)); transform-origin: center; }
+.oriented-tiles { display: grid; gap: .35rem; width: 100%; min-width: 0; }
+.table-hand, .table-melds, .river { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: center; gap: .18rem; min-height: 2.25rem; }
+.table-hand { padding-bottom: .25rem; border-bottom: 1px solid rgba(255,255,255,.2); }
+.river { display: grid; grid-template-columns: repeat(6, minmax(1.2rem, 1fr)); justify-content: center; align-items: end; gap: .18rem; }
+.tile-image { position: relative; display: inline-flex; width: clamp(1.15rem, 2.5vw, 2rem); aspect-ratio: .7; align-items: center; justify-content: center; transition: outline .1s ease; }
+.tile-image img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.tile-image.concealed { opacity: .92; }
+.tile-image.called { transform: rotate(90deg); transform-origin: center; margin: 0 .35rem; }
+.tile-image.riichi-discard { transform: rotate(90deg); transform-origin: center; margin: 0 .35rem; }
+.tile-image.latest-discard { outline: 2px solid #ffe08a; outline-offset: 2px; border-radius: .2rem; }
+.draw-gap { display: inline-flex; margin-left: .5rem; }
+.meld-gap { width: .5rem; }
 @media (max-width: 760px) { .grid, .board-grid, .score-grid { grid-template-columns: 1fr 1fr; } .board-grid article:last-child { grid-column: 1 / -1; } }
-@media (max-width: 460px) { header { align-items: flex-start; } .header-tools { width: 100%; justify-content: space-between; } .grid, .board-grid, .score-grid { grid-template-columns: 1fr; } }
+@media (max-width: 760px) { .mahjong-table { min-height: 32rem; grid-template-columns: minmax(0, 1fr) minmax(9rem, 1.4fr) minmax(0, 1fr); } .oriented-frame { min-height: 5.5rem; } }
+@media (max-width: 460px) { header { align-items: flex-start; } .header-tools { width: 100%; justify-content: space-between; } .grid, .board-grid, .score-grid { grid-template-columns: 1fr; } .mahjong-table { min-width: 34rem; } .table-section { overflow-x: auto; } }
 `;
 
 export const dashboardJs = `(function () {

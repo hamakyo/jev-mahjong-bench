@@ -1,5 +1,7 @@
 import { createServer, type Server, type ServerResponse } from "node:http";
+import { readFile } from "node:fs/promises";
 import { dashboardCss } from "../live/dashboard/index.js";
+import { tileAssetPath } from "../live/dashboard/tiles.js";
 import { localeRuntimeJs } from "../live/dashboard/i18n.js";
 import { decisionTableRendererJs, tableStateRendererJs } from "../live/dashboard/renderer.js";
 import type { LiveMode } from "../live/events.js";
@@ -88,12 +90,7 @@ export const replayDashboardHtml = `<!doctype html>
         <article><span data-i18n="table.currentTurn">Current turn</span><strong id="current-turn">—</strong></article>
         <article><span data-i18n="table.status">Status</span><strong id="status">idle</strong></article>
       </section>
-      <section><h2 data-i18n="table.scores">Scores</h2><div id="scores" class="score-grid"></div></section>
-      <section class="board-grid">
-        <article><h2 data-i18n="table.discards">Discards</h2><div id="discards"></div></article>
-        <article><h2 data-i18n="table.melds">Melds</h2><div id="melds"></div></article>
-        <article><h2 data-i18n="table.dora">Dora</h2><div id="dora" class="tiles"></div><div id="events" class="muted"></div></article>
-      </section>
+      <section class="table-section"><h2 data-i18n="table.mahjongTable">Mahjong table</h2><div id="mahjong-table" class="mahjong-table"></div></section>
       <section><h2 data-i18n="sections.recentDecisions">Recent decisions</h2><div id="decisions" class="table-wrap"></div></section>
       <section id="debug-section" class="debug-section" hidden><h2 data-i18n="sections.debugSnapshot">Debug snapshot</h2><pre id="debug"></pre></section>
     </main>
@@ -288,6 +285,12 @@ async function handleReplayRequest(
   if (url.pathname === "/") return textResponse(response, "text/html; charset=utf-8", replayDashboardHtml);
   if (url.pathname === "/assets/app.js") return textResponse(response, "text/javascript; charset=utf-8", replayDashboardJs);
   if (url.pathname === "/assets/styles.css") return textResponse(response, "text/css; charset=utf-8", dashboardCss);
+  if (url.pathname.startsWith("/assets/tiles/")) {
+    const filename = decodeURIComponent(url.pathname.slice("/assets/tiles/".length));
+    const path = tileAssetPath(filename);
+    if (!path) return jsonResponse(response, 404, { error: "tile asset not found" });
+    return textResponse(response, "image/svg+xml; charset=utf-8", await readFile(path, "utf8"));
+  }
   if (url.pathname === "/api/health") return jsonResponse(response, 200, { ok: true, eventCount: options.timeline.eventCount });
   if (url.pathname === "/api/replay/manifest") return jsonResponse(response, 200, options.timeline.data.manifest);
   if (url.pathname === "/api/replay/index") return jsonResponse(response, 200, options.timeline.data.index);

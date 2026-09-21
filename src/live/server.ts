@@ -1,5 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { readFile } from "node:fs/promises";
 import { dashboardCss, dashboardHtml, dashboardJs } from "./dashboard/index.js";
+import { tileAssetPath } from "./dashboard/tiles.js";
 import { LiveEventHub, type LiveResetEvent, type LiveSubscriber } from "./hub.js";
 import { SnapshotStore } from "./snapshot.js";
 import type { DebugLiveEvent, LiveMode, PublicLiveEvent, SequencedLiveEvent } from "./events.js";
@@ -140,6 +142,16 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
   }
   if (url.pathname === "/assets/styles.css") {
     textResponse(response, "text/css; charset=utf-8", dashboardCss);
+    return;
+  }
+  if (url.pathname.startsWith("/assets/tiles/")) {
+    const filename = decodeURIComponent(url.pathname.slice("/assets/tiles/".length));
+    const path = tileAssetPath(filename);
+    if (!path) {
+      jsonResponse(response, 404, { error: "tile asset not found" });
+      return;
+    }
+    textResponse(response, "image/svg+xml; charset=utf-8", await readFile(path, "utf8"));
     return;
   }
   if (url.pathname === "/api/health") {

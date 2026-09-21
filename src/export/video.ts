@@ -137,6 +137,10 @@ export async function exportReplayVideo(options: VideoExportOptions): Promise<vo
         : event.event.type;
       const frames = frameCount(durationMs(type, options.speed), options.fps);
       await page.goto("http://127.0.0.1:" + port + "/?mode=" + (options.debug ? "debug" : "spectator") + "&locale=" + encodeURIComponent(locale) + "&cursor=" + event.id, { waitUntil: "networkidle" });
+      await page.waitForFunction(() => Array.from(document.images).every((image) => image.complete && image.naturalWidth > 0));
+      await page.evaluate(async () => {
+        await Promise.all(Array.from(document.images).map((image) => typeof image.decode === "function" ? image.decode().catch(() => undefined) : Promise.resolve()));
+      });
       for (let index = 0; index < frames; index += 1) {
         frame += 1;
         await page.screenshot({ path: join(temporary, String(frame).padStart(8, "0") + ".png") });
