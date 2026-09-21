@@ -3,10 +3,12 @@ import { dashboardCss, dashboardHtml, dashboardJs } from "./dashboard/index.js";
 import { LiveEventHub, type LiveResetEvent, type LiveSubscriber } from "./hub.js";
 import { SnapshotStore } from "./snapshot.js";
 import type { DebugLiveEvent, LiveMode, PublicLiveEvent, SequencedLiveEvent } from "./events.js";
+import type { TournamentControl } from "./control.js";
 
 export interface LiveServerOptions {
   hub: LiveEventHub;
   snapshots: SnapshotStore;
+  control?: TournamentControl;
   host?: string;
   port?: number;
 }
@@ -81,7 +83,9 @@ export function createLiveServer(options: LiveServerOptions): LiveServer {
         response.destroy(error instanceof Error ? error : undefined);
         return;
       }
-      jsonResponse(response, 400, { error: error instanceof Error ? error.message : String(error) });
+      const status = error && typeof error === "object" && "statusCode" in error
+        && typeof error.statusCode === "number" ? error.statusCode : 400;
+      jsonResponse(response, status, { error: error instanceof Error ? error.message : String(error) });
     });
   });
   let actualPort = port;
@@ -121,7 +125,7 @@ export function createLiveServer(options: LiveServerOptions): LiveServer {
 }
 
 async function handleRequest(request: IncomingMessage, response: ServerResponse, options: LiveServerOptions): Promise<void> {
-  if (request.method !== "GET") {
+  if (request.method !== "GET" && request.method !== "POST") {
     jsonResponse(response, 405, { error: "method not allowed" });
     return;
   }
@@ -145,6 +149,35 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
       lastEventId: options.hub.lastEventId,
       status: options.snapshots.getSnapshot("spectator").status,
     });
+    return;
+  }
+  if (url.pathname === "/api/control") {
+    if (!options.control) {
+      jsonResponse(response, 404, { error: "live control is not enabled" });
+      return;
+    }
+    if (request.method !== "GET") {
+      jsonResponse(response, 405, { error: "method not allowed" });
+      return;
+    }
+    jsonResponse(response, 200, options.control.getSnapshot());
+    return;
+  }
+  if (url.pathname === "/api/control/pause" || url.pathname === "/api/control/resume" || url.pathname === "/api/control/step") {
+    if (!options.control) {
+      jsonResponse(response, 404, { error: "live control is not enabled" });
+      return;
+    }
+    if (request.method !== "POST") {
+      jsonResponse(response, 405, { error: "method not allowed" });
+      return;
+    }
+    const snapshot = url.pathname.endsWith("/pause")
+      ? options.control.pause()
+      : url.pathname.endsWith("/resume")
+        ? options.control.resume()
+        : options.control.step();
+    jsonResponse(response, 200, snapshot);
     return;
   }
   if (url.pathname === "/api/snapshot") {

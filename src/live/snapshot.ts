@@ -113,6 +113,12 @@ export interface LiveSnapshot {
   debug?: LiveDebugSnapshot;
 }
 
+export interface SnapshotCheckpoint {
+  spectator: LiveSnapshot;
+  debug: LiveSnapshot;
+  latencyValuesByAgent: Record<string, number[]>;
+}
+
 interface MutableAgentAggregate extends LiveAgentAggregate {
   latencyValues: number[];
 }
@@ -503,6 +509,24 @@ export class SnapshotStore {
     applyDebugEvent(this.debugState, batch.debugEvent);
   }
 
+  checkpoint(): SnapshotCheckpoint {
+    return {
+      spectator: this.getSnapshot("spectator"),
+      debug: this.getSnapshot("debug"),
+      latencyValuesByAgent: Object.fromEntries(
+        Object.entries(this.debugState.agents).map(([agentId, aggregate]) => [agentId, [...aggregate.latencyValues]]),
+      ),
+    };
+  }
+
+  restore(checkpoint: SnapshotCheckpoint): void {
+    if (checkpoint.spectator.streamId !== this.streamId || checkpoint.debug.streamId !== this.streamId) {
+      throw new Error("snapshot checkpoint stream ID mismatch");
+    }
+    restoreMutableSnapshot(this.publicState, checkpoint.debug, checkpoint.latencyValuesByAgent);
+    restoreMutableSnapshot(this.debugState, checkpoint.debug, checkpoint.latencyValuesByAgent);
+  }
+
   getSnapshot(mode: LiveMode = "spectator"): LiveSnapshot {
     const source = mode === "debug" ? this.debugState : this.publicState;
     const decisionsBySeat = mode === "debug"
@@ -543,4 +567,65 @@ export class SnapshotStore {
     if (mode === "debug") result.debug = clone(source.debugState);
     return result;
   }
+}
+
+function restoreMutableSnapshot(
+  target: MutableSnapshot,
+  source: LiveSnapshot,
+  latencyValuesByAgent: Record<string, number[]>,
+): void {
+  const agents = Object.fromEntries(Object.entries(source.agents).map(([agentId, value]) => {
+    const full = value as Partial<LiveAgentAggregate>;
+    return [agentId, {
+      decisions: numberValue(full.decisions),
+      legalDecisions: numberValue(full.legalDecisions),
+      fallbackCount: numberValue(full.fallbackCount),
+      errorCount: numberValue(full.errorCount),
+      latency: full.latency ? clone(full.latency) : emptyLatency(),
+      inputTokens: numberValue(full.inputTokens),
+      outputTokens: numberValue(full.outputTokens),
+      retryCount: numberValue(full.retryCount),
+      escalationCount: numberValue(full.escalationCount),
+      handCount: numberValue(value.handCount),
+      wins: numberValue(value.wins),
+      dealIns: numberValue(value.dealIns),
+      riichi: numberValue(value.riichi),
+      calls: numberValue(value.calls),
+      completedGames: numberValue(value.completedGames),
+      latencyValues: [...(latencyValuesByAgent[agentId] ?? [])],
+    } satisfies MutableAgentAggregate];
+  }));
+  const debugState = source.debug ?? {
+    latestStateBySeat: {},
+    legalActionsBySeat: {},
+    rawEvents: [],
+    providerMetadataBySeat: {},
+    diagnosticsBySeat: {},
+  };
+  Object.assign(target, {
+    schemaVersion: 1,
+    streamId: source.streamId,
+    lastEventId: source.lastEventId,
+    status: source.status,
+    ...(source.error ? { error: source.error } : {}),
+    tournament: clone(source.tournament),
+    currentGame: clone(source.currentGame),
+    round: source.round,
+    honba: source.honba,
+    kyotaku: source.kyotaku,
+    oya: source.oya,
+    currentSeat: source.currentSeat,
+    scores: [...source.scores],
+    ranks: [...source.ranks],
+    seatAgents: clone(source.seatAgents),
+    discards: clone(source.discards),
+    melds: clone(source.melds),
+    doraIndicators: [...source.doraIndicators],
+    riichi: clone(source.riichi),
+    recentEvents: clone(source.recentEvents),
+    decisionsBySeat: clone(source.decisionsBySeat),
+    lastDecisions: clone(source.lastDecisions),
+    agents,
+    debugState: clone(debugState),
+  });
 }

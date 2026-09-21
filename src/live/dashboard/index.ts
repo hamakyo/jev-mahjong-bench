@@ -22,6 +22,19 @@ export const dashboardHtml = `<!doctype html>
         <article><span>Games</span><strong id="games">0 / 0</strong></article>
         <article><span>Status</span><strong id="status">idle</strong></article>
       </section>
+      <section id="control-panel" hidden>
+        <h2>Execution control</h2>
+        <div class="control-row">
+          <strong id="control-state">—</strong>
+          <span>next: <code id="control-next">—</code></span>
+          <span>step: <code id="control-step">0</code></span>
+          <span id="control-pause-requested" class="muted"></span>
+          <button id="control-pause" type="button">Pause</button>
+          <button id="control-resume" type="button">Resume</button>
+          <button id="control-step-button" type="button">Step</button>
+        </div>
+        <p id="control-error" class="error"></p>
+      </section>
       <section>
         <h2>Scores</h2>
         <div id="scores" class="score-grid"></div>
@@ -85,6 +98,9 @@ table { width: 100%; border-collapse: collapse; font-size: .82rem; }
 th, td { text-align: left; padding: .55rem .45rem; border-bottom: 1px solid #2a394b; white-space: nowrap; }
 th { color: #9fb6ca; }
 .action-cell { max-width: 20rem; white-space: normal; word-break: break-word; }
+.control-row { display: flex; align-items: center; flex-wrap: wrap; gap: .65rem; }
+button { border: 1px solid #4e6d84; border-radius: .4rem; padding: .4rem .7rem; background: #223746; color: #edf2f7; cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: .45; }
 .mode { padding: .35rem .6rem; border-radius: 999px; background: #275b70; font-size: .78rem; }
 .mode.debug { background: #875e29; }
 .debug-section pre { max-height: 38rem; overflow: auto; white-space: pre-wrap; word-break: break-word; color: #c6d3df; }
@@ -154,6 +170,39 @@ export const dashboardJs = `(function () {
     debugSection.hidden = mode !== "debug";
     if (mode === "debug") $("debug").textContent = JSON.stringify(snapshot.debug || {}, null, 2);
   }
+  const controlPanel = $("control-panel");
+  const controlError = $("control-error");
+  async function refreshControl() {
+    const response = await fetch("/api/control", { cache: "no-store" });
+    if (response.status === 404) {
+      controlPanel.hidden = true;
+      return;
+    }
+    if (!response.ok) throw new Error("control status request failed");
+    const control = await response.json();
+    controlPanel.hidden = false;
+    setText("control-state", control.state);
+    setText("control-next", control.nextStep || "—");
+    setText("control-step", control.stepNumber || 0);
+    setText("control-pause-requested", control.pauseRequested ? "pause requested" : "");
+    $("control-pause").disabled = control.state !== "running" && control.state !== "stepping";
+    $("control-resume").disabled = control.state !== "paused";
+    $("control-step-button").disabled = control.state !== "paused";
+    controlError.textContent = "";
+  }
+  async function sendControl(path) {
+    try {
+      const response = await fetch(path, { method: "POST", cache: "no-store" });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "control request failed");
+      await refreshControl();
+    } catch (error) {
+      controlError.textContent = error instanceof Error ? error.message : String(error);
+    }
+  }
+  $("control-pause").addEventListener("click", () => { void sendControl("/api/control/pause"); });
+  $("control-resume").addEventListener("click", () => { void sendControl("/api/control/resume"); });
+  $("control-step-button").addEventListener("click", () => { void sendControl("/api/control/step"); });
   $("mode").textContent = mode === "debug" ? "DEBUG · local only" : "SPECTATOR";
   if (mode === "debug") $("mode").classList.add("debug");
   let source;
@@ -177,5 +226,7 @@ export const dashboardJs = `(function () {
     source.onopen = () => { $("connection").textContent = "Live · stream connected"; $("connection").classList.remove("error"); };
     source.onerror = () => { $("connection").textContent = "Reconnecting…"; };
   }
+  setInterval(() => { void refreshControl().catch((error) => { controlError.textContent = error.message; }); }, 1_000);
+  void refreshControl().catch((error) => { controlError.textContent = error.message; });
   refresh().then(connect).catch((error) => { $("connection").textContent = error.message; $("connection").classList.add("error"); });
 })();`;

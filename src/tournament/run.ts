@@ -17,6 +17,8 @@ import { extractGameOutcomes } from "./outcomes.js";
 import { RiichiEnvBridge } from "../game/bridge.js";
 import { inspectGameDecisionInput, LlmInputContractError, type GameInputDiagnostics } from "../game/input.js";
 import type { LiveDecisionDiagnostics, TournamentEvent } from "../live/events.js";
+import type { TournamentControl } from "../live/control.js";
+import { ReplayRecorder } from "../replay/recorder.js";
 
 export interface TournamentOptions {
   seats: string[];
@@ -38,6 +40,7 @@ export interface TournamentObserver {
 
 export interface TournamentRuntime {
   observer?: TournamentObserver;
+  control?: TournamentControl;
 }
 
 export interface ScheduledTournamentGame {
@@ -456,6 +459,7 @@ async function runGame(
   game: ScheduledTournamentGame,
   observer: TournamentObserver | undefined,
   totalGames: number,
+  control: TournamentControl | undefined,
 ): Promise<{ result: TournamentGameResult; records: GameDecisionRecord[]; events: unknown[] }> {
   const bridge = new RiichiEnvBridge();
   const agents: GameAgentWithMetadata[] = [];
@@ -470,6 +474,7 @@ async function runGame(
         ...(options.hybridThreshold !== undefined ? { hybridThreshold: options.hybridThreshold } : {}),
       }));
     }
+    await control?.enter("game-start");
     const started = await bridge.startGame({ gameId: game.gameId, mode: options.mode, rule: options.rule, seed: game.seed });
     ({ observations, done } = started);
     emitLive(observer, {
@@ -495,10 +500,12 @@ async function runGame(
         event,
       });
     }
+    control?.completePhase("game-start", done ? "game-end" : "decision-batch");
     let guard = 0;
     while (!done) {
       if (++guard > 20_000) throw new Error("RiichiEnv game exceeded the safety turn limit");
       if (!observations.length) throw new Error("RiichiEnv returned no pending observations before game end");
+      await control?.enter("decision-batch");
       const decisions = await Promise.all(
         observations
           .slice()
@@ -553,6 +560,8 @@ async function runGame(
       decisions.sort((left, right) => left.record.player - right.record.player);
       for (const decision of decisions) records.push(decision.record);
       const actions = new Map(decisions.map((decision) => [decision.record.player, decision.action]));
+      control?.completePhase("decision-batch", "environment-step");
+      await control?.enter("environment-step");
       const stepped = await bridge.step(actions);
       ({ observations, done } = stepped);
       for (const event of stepped.events) {
@@ -566,7 +575,9 @@ async function runGame(
           event,
         });
       }
+      control?.completePhase("environment-step", done ? "game-end" : "decision-batch");
     }
+    await control?.enter("game-end");
     const final = await bridge.finish();
     const outcomes = extractGameOutcomes(final.events);
     const players = game.seats.map((_, seat) => playerResult(
@@ -607,6 +618,7 @@ async function runGame(
       errorCount: result.errorCount,
       result,
     });
+    control?.completePhase("game-end", game.index + 1 < totalGames ? "game-start" : "tournament-end");
     return { result, records, events: final.events };
   } finally {
     await Promise.all(agents.map((agent) => agent.close?.()));
@@ -656,7 +668,14 @@ function modelMetadata(options: TournamentOptions, mortalPolicy: Record<string, 
 export async function runTournament(options: TournamentOptions, runtime: TournamentRuntime = {}): Promise<void> {
   validateOptions(options);
   const schedule = buildTournamentSchedule(options);
-  const observer = runtime.observer;
+  const output = resolve(options.out);
+  const replay = new ReplayRecorder(output);
+  const observer: TournamentObserver = {
+    emit: (event) => {
+      replay.record(event);
+      emitLive(runtime.observer, event);
+    },
+  };
   const totalGames = schedule.length;
   emitLive(observer, {
     schemaVersion: 1,
@@ -681,14 +700,13 @@ export async function runTournament(options: TournamentOptions, runtime: Tournam
       seats: [...seats],
     })),
   });
-  const output = resolve(options.out);
   let completedGames = 0;
   try {
     await mkdir(join(output, "games"), { recursive: true });
     const allResults: TournamentGameResult[] = [];
     const allRecords: GameDecisionRecord[] = [];
     for (const game of schedule) {
-      const finished = await runGame(options, game, observer, totalGames);
+      const finished = await runGame(options, game, observer, totalGames, runtime.control);
       allResults.push(finished.result);
       allRecords.push(...finished.records);
       const eventLines = finished.events.map((event) => JSON.stringify(event)).join("\n") + "\n";
@@ -706,6 +724,7 @@ export async function runTournament(options: TournamentOptions, runtime: Tournam
       console.log(`Finished game ${game.index + 1}/${schedule.length}: ${finished.result.gameId}`);
     }
 
+    await runtime.control?.enter("tournament-end");
     const metrics: TournamentMetrics = aggregateTournament(allResults, allRecords);
     const mortalPolicy = options.mortalConfig
       ? await mortalReferencePolicy(options.mortalConfig) as unknown as Record<string, unknown>
@@ -755,7 +774,15 @@ export async function runTournament(options: TournamentOptions, runtime: Tournam
       totalGames,
       errorCount: summary.errorCount,
     });
+    await replay.finalize({
+      status: "complete",
+      configSha256,
+      results: allResults,
+    });
+    runtime.control?.completePhase("tournament-end", null);
+    runtime.control?.finish();
   } catch (error) {
+    runtime.control?.fail();
     emitLive(observer, {
       schemaVersion: 1,
       type: "tournament:error",
@@ -764,6 +791,10 @@ export async function runTournament(options: TournamentOptions, runtime: Tournam
       completedGames,
       totalGames,
     });
+    await replay.finalize({
+      status: "failed",
+      error: error instanceof Error ? error.message : String(error),
+    }).catch(() => undefined);
     throw error;
   }
 }

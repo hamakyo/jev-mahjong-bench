@@ -17,6 +17,7 @@ import { runTournament, type TournamentOptions } from "./tournament/run.js";
 import { LiveEventHub } from "./live/hub.js";
 import { SnapshotStore } from "./live/snapshot.js";
 import { createLiveServer } from "./live/server.js";
+import { TournamentControl } from "./live/control.js";
 import type { DecisionRecord } from "./types.js";
 
 interface Flags { [key: string]: string; }
@@ -248,13 +249,15 @@ async function runTournamentWatchCommand(argv: string[]): Promise<void> {
   const exitOnComplete = booleanFlag(flags, "exit-on-complete", false);
   const hub = new LiveEventHub();
   const snapshots = new SnapshotStore(hub.streamId);
-  const liveServer = createLiveServer({ hub, snapshots, host, port });
+  const control = new TournamentControl();
+  const liveServer = createLiveServer({ hub, snapshots, control, host, port });
   const actualPort = await liveServer.listen();
   console.log(`Live tournament dashboard: http://${host}:${actualPort}/`);
   let stopping = false;
   const stop = async (exitCode?: number) => {
     if (stopping) return;
     stopping = true;
+    control.close(new Error("live tournament stopped"));
     await liveServer.close().catch(() => undefined);
     if (exitCode !== undefined) process.exitCode = exitCode;
   };
