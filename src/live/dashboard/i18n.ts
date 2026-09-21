@@ -73,6 +73,13 @@ const en = {
   "sections.liveAgents": "Live agents",
   "sections.recentDecisions": "Recent decisions",
   "sections.debugSnapshot": "Debug snapshot",
+  "sections.debugInspector": "Inspector",
+  "debug.legalActions": "Legal actions",
+  "debug.confidence": "Confidence",
+  "debug.probabilities": "Probabilities",
+  "debug.totalTokens": "Total tokens",
+  "debug.provider": "Provider",
+  "debug.model": "Model",
   "metrics.agent": "Agent",
   "metrics.games": "Games",
   "metrics.hands": "Hands",
@@ -181,6 +188,13 @@ const ja = {
   "sections.liveAgents": "ライブagent",
   "sections.recentDecisions": "直近の判断",
   "sections.debugSnapshot": "Debug snapshot",
+  "sections.debugInspector": "インスペクター",
+  "debug.legalActions": "合法手",
+  "debug.confidence": "確信度",
+  "debug.probabilities": "確率",
+  "debug.totalTokens": "合計token",
+  "debug.provider": "プロバイダー",
+  "debug.model": "モデル",
   "metrics.agent": "agent",
   "metrics.games": "対局",
   "metrics.hands": "局数",
@@ -230,6 +244,10 @@ function interpolate(message: string, params: TranslationParams | undefined): st
 
 export function isLocale(value: unknown): value is Locale {
   return value === "en" || value === "ja";
+}
+
+export function isMessageKey(value: string): value is MessageKey {
+  return Object.prototype.hasOwnProperty.call(en, value);
 }
 
 function localeFromCandidate(value: unknown): Locale | undefined {
@@ -300,7 +318,7 @@ export function resolveLocale(options: LocaleResolutionOptions | string | URL = 
 }
 
 export function t(
-  key: MessageKey | string,
+  key: MessageKey,
   params?: TranslationParams | Locale,
   locale: Locale = DEFAULT_LOCALE,
 ): string {
@@ -308,9 +326,18 @@ export function t(
   const requestedLocale = typeof params === "string" && isLocale(params) ? params : paramsLocale ?? locale;
   const selectedLocale = isLocale(requestedLocale) ? requestedLocale : DEFAULT_LOCALE;
   const interpolationParams = typeof params === "string" ? undefined : params;
-  const keyName = String(key) as MessageKey;
-  const message = messages[selectedLocale][keyName] ?? messages.en[keyName] ?? String(key);
+  const message = messages[selectedLocale][key] ?? messages.en[key];
   return interpolate(message, interpolationParams);
+}
+
+/** Runtime boundary for untyped values; typed UI lookups should use t(). */
+export function translateUnknown(
+  key: string,
+  params?: TranslationParams | Locale,
+  locale: Locale = DEFAULT_LOCALE,
+): string {
+  if (isMessageKey(key)) return t(key, params, locale);
+  return interpolate(key, typeof params === "string" ? undefined : params);
 }
 
 const SEATS = ["E", "S", "W", "N"] as const;

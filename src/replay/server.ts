@@ -92,7 +92,7 @@ export const replayDashboardHtml = `<!doctype html>
       </section>
       <section class="table-section"><h2 data-i18n="table.mahjongTable">Mahjong table</h2><div id="mahjong-table" class="mahjong-table"></div></section>
       <section><h2 data-i18n="sections.recentDecisions">Recent decisions</h2><div id="decisions" class="table-wrap"></div></section>
-      <section id="debug-section" class="debug-section" hidden><h2 data-i18n="sections.debugSnapshot">Debug snapshot</h2><pre id="debug"></pre></section>
+      <section id="debug-section" class="debug-section" hidden><h2 data-i18n="sections.debugSnapshot">Debug snapshot</h2><div id="debug-inspector" class="debug-inspector" hidden><h3 data-i18n="sections.debugInspector">Inspector</h3><div id="debug-inspector-content"></div></div><pre id="debug"></pre></section>
     </main>
     <script src="/assets/app.js" defer></script>
   </body>
@@ -165,7 +165,12 @@ ${decisionTableRendererJs}
     renderDecisionTable(snapshot, mode);
     const debugSection = $("debug-section");
     debugSection.hidden = mode !== "debug";
-    if (mode === "debug") $("debug").textContent = JSON.stringify(snapshot.debug || {}, null, 2);
+    const debugInspector = $("debug-inspector");
+    debugInspector.hidden = mode !== "debug";
+    if (mode === "debug") {
+      renderDebugInspector(snapshot);
+      $("debug").textContent = JSON.stringify(snapshot.debug || {}, null, 2);
+    }
   }
   localeRuntime.setSnapshotRenderer((body) => {
     $("mode").textContent = modeLabel();

@@ -58,6 +58,10 @@ export const dashboardHtml = `<!doctype html>
       </section>
       <section id="debug-section" class="debug-section" hidden>
         <h2 data-i18n="sections.debugSnapshot">Debug snapshot</h2>
+        <div id="debug-inspector" class="debug-inspector" hidden>
+          <h3 data-i18n="sections.debugInspector">Inspector</h3>
+          <div id="debug-inspector-content"></div>
+        </div>
         <pre id="debug"></pre>
       </section>
     </main>
@@ -114,6 +118,12 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .mode { padding: .35rem .6rem; border-radius: 999px; background: #275b70; font-size: .78rem; overflow-wrap: anywhere; }
 .mode.debug { background: #875e29; }
 .debug-section pre { max-height: 38rem; overflow: auto; white-space: pre-wrap; word-break: break-word; color: #c6d3df; }
+.debug-inspector { margin-bottom: 1rem; }
+.debug-inspector h3 { margin: 0 0 .6rem; color: #9fb6ca; font-size: .9rem; overflow-wrap: anywhere; }
+.debug-inspector-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .6rem; margin: 0; }
+.debug-inspector-grid > div { min-width: 0; padding: .6rem; border-radius: .45rem; background: #202e3c; }
+.debug-inspector-grid dt { color: #9fb6ca; font-size: .78rem; overflow-wrap: anywhere; }
+.debug-inspector-grid dd { margin: .25rem 0 0; overflow-wrap: anywhere; word-break: break-word; }
 .error { color: #ff9c9c; }
 .table-section { overflow: hidden; }
 .mahjong-table { display: grid; grid-template-columns: minmax(0, 1fr) minmax(14rem, 1.25fr) minmax(0, 1fr); grid-template-rows: minmax(10rem, 1fr) minmax(8rem, .8fr) minmax(10rem, 1fr); grid-template-areas: "top top top" "left center right" "bottom bottom bottom"; gap: .6rem; min-height: 38rem; padding: .75rem; border-radius: .75rem; background: radial-gradient(circle, #1f684e, #124033 70%); border: .5rem solid #6f4c2b; box-shadow: inset 0 0 0 .25rem #9a6a39; }
@@ -144,9 +154,9 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .tile-image.latest-discard { outline: 2px solid #ffe08a; outline-offset: 2px; border-radius: .2rem; }
 .draw-gap { display: inline-flex; margin-left: .5rem; }
 .meld-gap { width: .5rem; }
-@media (max-width: 760px) { .grid, .board-grid, .score-grid { grid-template-columns: 1fr 1fr; } .board-grid article:last-child { grid-column: 1 / -1; } }
+@media (max-width: 760px) { .grid, .board-grid, .score-grid, .debug-inspector-grid { grid-template-columns: 1fr 1fr; } .board-grid article:last-child { grid-column: 1 / -1; } }
 @media (max-width: 760px) { .mahjong-table { min-height: 32rem; grid-template-columns: minmax(0, 1fr) minmax(9rem, 1.4fr) minmax(0, 1fr); } .oriented-frame { min-height: 5.5rem; } }
-@media (max-width: 460px) { header { align-items: flex-start; } .header-tools { width: 100%; justify-content: space-between; } .grid, .board-grid, .score-grid { grid-template-columns: 1fr; } .mahjong-table { min-width: 34rem; } .table-section { overflow-x: auto; } }
+@media (max-width: 460px) { header { align-items: flex-start; } .header-tools { width: 100%; justify-content: space-between; } .grid, .board-grid, .score-grid, .debug-inspector-grid { grid-template-columns: 1fr; } .mahjong-table { min-width: 34rem; } .table-section { overflow-x: auto; } }
 `;
 
 export const dashboardJs = `(function () {
@@ -202,7 +212,12 @@ ${decisionTableRendererJs}
     renderDecisionTable(snapshot, mode);
     const debugSection = $("debug-section");
     debugSection.hidden = mode !== "debug";
-    if (mode === "debug") $("debug").textContent = JSON.stringify(snapshot.debug || {}, null, 2);
+    const debugInspector = $("debug-inspector");
+    debugInspector.hidden = mode !== "debug";
+    if (mode === "debug") {
+      renderDebugInspector(snapshot);
+      $("debug").textContent = JSON.stringify(snapshot.debug || {}, null, 2);
+    }
   }
   const controlPanel = $("control-panel");
   const controlError = $("control-error");

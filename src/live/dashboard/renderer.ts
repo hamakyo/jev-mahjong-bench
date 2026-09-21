@@ -4,6 +4,51 @@
  */
 import { tileCatalogRuntimeJs } from "./tiles.js";
 export const decisionTableRendererJs = String.raw`
+  function renderDebugInspector(snapshot) {
+    const node = $("debug-inspector-content");
+    if (!node) return;
+    const label = (key, params) => localeRuntime.t(key, params);
+    const debug = snapshot.debug || {};
+    const seat = snapshot.currentSeat == null ? undefined : seats[snapshot.currentSeat];
+    const legalActions = seat && Array.isArray(debug.legalActionsBySeat?.[seat]) ? debug.legalActionsBySeat[seat] : [];
+    const diagnostics = seat && debug.diagnosticsBySeat?.[seat] && typeof debug.diagnosticsBySeat[seat] === "object" ? debug.diagnosticsBySeat[seat] : {};
+    const providerMetadata = seat && debug.providerMetadataBySeat?.[seat] && typeof debug.providerMetadataBySeat[seat] === "object" ? debug.providerMetadataBySeat[seat] : {};
+    const diagnosticProviderMetadata = diagnostics.providerMetadata && typeof diagnostics.providerMetadata === "object" && !Array.isArray(diagnostics.providerMetadata) ? diagnostics.providerMetadata : {};
+    const finalSource = typeof diagnostics.hybridTrace?.finalSource === "string" ? diagnostics.hybridTrace.finalSource : undefined;
+    const providerSource = finalSource === "jev-fallback" ? "jev" : finalSource === "jev" || finalSource === "gpt" ? finalSource : undefined;
+    const sourceRecord = providerSource && diagnosticProviderMetadata[providerSource] && typeof diagnosticProviderMetadata[providerSource] === "object" ? diagnosticProviderMetadata[providerSource] : undefined;
+    const sourceMetadata = sourceRecord?.metadata && typeof sourceRecord.metadata === "object" && !Array.isArray(sourceRecord.metadata) ? sourceRecord.metadata : sourceRecord;
+    const hasProviderIdentity = (value) => value && typeof value === "object" && (value.provider != null || value.providerId != null || value.modelId != null || value.model != null || value.requestedModel != null);
+    const selectedProviderMetadata = hasProviderIdentity(sourceMetadata)
+      ? sourceMetadata
+      : hasProviderIdentity(providerMetadata)
+        ? providerMetadata
+        : hasProviderIdentity(diagnosticProviderMetadata)
+          ? diagnosticProviderMetadata
+          : {};
+    const decision = seat && snapshot.decisionsBySeat?.[seat] ? snapshot.decisionsBySeat[seat] : (snapshot.lastDecisions || []).find((item) => item.player === snapshot.currentSeat);
+    const actionText = legalActions.map((action) => {
+      const rawType = String(action?.type || "unknown");
+      const translated = localeRuntime.formatActionType(rawType);
+      const typeText = translated === rawType ? rawType : translated + " (" + rawType + ")";
+      return String(action?.id || rawType) + " · " + typeText;
+    }).join(", ") || "—";
+    const probabilityText = diagnostics.probabilities && typeof diagnostics.probabilities === "object" ? JSON.stringify(diagnostics.probabilities) : "—";
+    const inputTokens = typeof decision?.inputTokens === "number" ? decision.inputTokens : undefined;
+    const outputTokens = typeof decision?.outputTokens === "number" ? decision.outputTokens : undefined;
+    const totalTokens = inputTokens === undefined && outputTokens === undefined ? "—" : String((inputTokens || 0) + (outputTokens || 0));
+    const provider = selectedProviderMetadata.provider ?? selectedProviderMetadata.providerId ?? "—";
+    const model = selectedProviderMetadata.modelId ?? selectedProviderMetadata.model ?? selectedProviderMetadata.requestedModel ?? "—";
+    node.innerHTML = '<dl class="debug-inspector-grid">' +
+      '<div><dt>' + label("debug.legalActions") + '</dt><dd>' + escapeHtml(actionText) + '</dd></div>' +
+      '<div><dt>' + label("debug.confidence") + '</dt><dd>' + escapeHtml(diagnostics.confidence == null ? "—" : String(diagnostics.confidence)) + '</dd></div>' +
+      '<div><dt>' + label("debug.probabilities") + '</dt><dd>' + escapeHtml(probabilityText) + '</dd></div>' +
+      '<div><dt>' + label("debug.totalTokens") + '</dt><dd>' + escapeHtml(totalTokens) + '</dd></div>' +
+      '<div><dt>' + label("debug.provider") + '</dt><dd>' + escapeHtml(String(provider)) + '</dd></div>' +
+      '<div><dt>' + label("debug.model") + '</dt><dd>' + escapeHtml(String(model)) + '</dd></div>' +
+      '</dl>';
+  }
+
   function renderDecisionTable(snapshot, mode) {
     const node = $("decisions");
     if (!node) return;
