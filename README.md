@@ -202,8 +202,8 @@ pnpm tournament -- \
   --out results/tournament
 ```
 
-The output is fixed to `tournament.json`, `games.jsonl`, `decisions.jsonl`,
-`tournament.md`, and `games/<gameId>.mjai.jsonl`. Agent failures use legal `none`/pass when
+The output includes `tournament.json`, `games.jsonl`, `decisions.jsonl`,
+`tournament.md`, `games/<gameId>.mjai.jsonl`, and `replay/`. Agent failures use legal `none`/pass when
 available, otherwise the normalized MJAI action with the smallest stable JSON
 ordering; requested and applied actions remain separate in every decision
 record.
@@ -231,6 +231,48 @@ diagnostics such as the current LLM state, legal actions, fallback information,
 and provider metadata; do not expose debug mode beyond a trusted machine. Use
 `--exit-on-complete true` for CI or smoke tests. The server uses only Node's
 standard `http` module and keeps a bounded SSE replay buffer for reconnects.
+
+While a watch run is active, the dashboard exposes phase-safe Pause, Resume, and
+single-step controls. Pause waits for the current provider decision batch to
+finish; it never changes the order of concurrent seat requests. Step advances
+exactly one phase: game-start, decision-batch, environment-step, or game-end.
+
+### Offline replay
+
+Normal tournament runs and tournament:watch save internal observer events,
+privacy-safe checkpoints, and byte-offset indexes under the replay/ directory.
+Replay never creates an agent or provider and reconstructs snapshots from the
+nearest checkpoint.
+
+```bash
+pnpm replay:serve -- --input results/live --port 3000
+```
+
+The replay UI supports play/pause, single-event navigation, cursor scrubbing,
+speed selection, and Spectator/Debug mode. Spectator replay applies the same
+public projector as the live stream; concealed tiles and provider diagnostics
+remain unavailable.
+
+### Video export
+
+Video export is optional and requires the Playwright package, an installed
+Chromium browser, and ffmpeg and ffprobe on PATH. After installing dependencies,
+install the browser once with `pnpm exec playwright install chromium`. It reads
+only the saved replay artifact and passes encoder arguments without a shell.
+
+```bash
+pnpm video:export -- \
+  --input results/live \
+  --game-id GAME_ID \
+  --format mp4 \
+  --fps 30 \
+  --speed 1 \
+  --out results/live/replay.mp4
+```
+
+Spectator is the default. Debug video requires --debug true; the command also
+writes a sidecar JSON containing source, cursor range, seed, viewport, codec,
+tool versions, and video SHA-256.
 
 ### LLM input and Mortal history
 

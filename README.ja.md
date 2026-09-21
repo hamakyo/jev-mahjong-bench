@@ -157,7 +157,7 @@ pnpm tournament -- \
 ```
 
 出力は`tournament.json`、`tournament.md`、`games.jsonl`、`decisions.jsonl`、
-`games/<gameId>.mjai.jsonl`です。seed schedule、席順、依存バージョン、モデル
+`games/<gameId>.mjai.jsonl`、`replay/`です。seed schedule、席順、依存バージョン、モデル
 情報、canonical設定SHA-256、エージェント別成績、Wilson区間、score/rankの
 Student-t区間、ペア差分を保存します。
 
@@ -187,6 +187,45 @@ CIやsmoke testでは`--exit-on-complete true`を指定できます。サーバ�
 
 watchの`--port 0`は空いているポートを自動割り当てします。通常のwatchは対局
 終了後も最終snapshotを提供し、CIでは`--exit-on-complete true`で終了させます。
+
+watch実行中は、局面の安全な境界でPause、Resume、1フェーズだけ進める
+Stepを操作できます。Pauseは実行中のprovider判断を中断せず、同時に要求された
+座席の判断batchが完了してから停止します。Stepはgame-start、
+decision-batch、environment-step、game-endのいずれか1つだけ進めます。
+
+### オフラインReplay
+
+通常のtournamentとtournament:watchは、providerを再実行せずに復元できる内部
+イベント、privacy-safe checkpoint、byte offset indexをreplay/へ保存します。
+
+```bash
+pnpm replay:serve -- --input results/live --port 3000
+```
+
+Replay画面では再生／停止、イベント単位の前後移動、slider、速度変更、
+Spectator／Debug切替を行えます。Spectatorはliveと同じ公開projectorを通るため、
+手牌やprovider診断は表示されません。
+
+### 動画書き出し
+
+動画書き出しは任意機能で、Playwright、Chromium、ffmpeg、ffprobeが必要です。
+依存関係をインストールした後、`pnpm exec playwright install chromium`で
+ブラウザを一度インストールしてください。保存済みReplayだけを入力にし、
+encoderはshellを介さず起動します。
+
+```bash
+pnpm video:export -- \
+  --input results/live \
+  --game-id GAME_ID \
+  --format mp4 \
+  --fps 30 \
+  --speed 1 \
+  --out results/live/replay.mp4
+```
+
+既定はSpectatorです。Debug動画は--debug trueを明示した場合だけ作成でき、
+入力artifact、cursor範囲、seed、viewport、codec、tool version、動画SHA-256を
+sidecar JSONへ保存します。
 
 ### LLM入力とMortal履歴
 

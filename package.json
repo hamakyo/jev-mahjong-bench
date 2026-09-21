@@ -6,16 +6,21 @@
   "type": "module",
   "license": "MIT",
   "packageManager": "pnpm@10.34.5",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "bench": "tsx src/cli.ts",
     "bench:sample": "tsx src/cli.ts --agents random --dataset datasets/sample.jsonl --out results/sample",
     "dataset:import": "tsx src/cli.ts dataset:import",
     "dataset:validate": "tsx src/cli.ts dataset:validate",
     "dataset:stats": "tsx src/cli.ts dataset:stats",
+    "dataset:split": "tsx src/cli.ts dataset:split",
     "reference:mortal": "tsx src/cli.ts reference:mortal",
     "tournament": "tsx src/cli.ts tournament",
     "tournament:watch": "tsx src/cli.ts tournament:watch",
+    "replay:serve": "tsx src/cli.ts replay:serve",
+    "video:export": "tsx src/cli.ts video:export",
     "hybrid:sweep": "tsx src/cli.ts hybrid:sweep",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
@@ -26,6 +31,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "playwright": "^1.63.0",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0"

@@ -100,6 +100,40 @@ jobs:
             if (maxInputBytes >= 16384) throw new Error(`LLM input reached ${maxInputBytes} bytes`);
             const watch = JSON.parse(fs.readFileSync("/tmp/tournament-watch/tournament.json", "utf8"));
             if (watch.errorCount !== 0) throw new Error(`watch tournament errorCount=${watch.errorCount}`);
+            for (const root of ["/tmp/tournament", "/tmp/tournament-watch"]) {
+              for (const name of ["manifest.json", "index.json", "events.jsonl", "checkpoints.jsonl"]) {
+                if (!fs.existsSync(`${root}/replay/${name}`)) throw new Error(`missing replay artifact ${root}/replay/${name}`);
+              }
+            }
+            const replay = JSON.parse(fs.readFileSync("/tmp/tournament/replay/manifest.json", "utf8"));
+            if (replay.status !== "complete" || replay.eventCount < 1) throw new Error("normal tournament replay is incomplete");
           '
       - run: pnpm dataset:import -- --input /tmp/tournament/games --platform tenhou --game-id ci-tournament --out /tmp/tournament-samples.jsonl
       - run: pnpm dataset:validate -- --dataset /tmp/tournament-samples.jsonl
+
+  video-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm tournament -- --seats random,random,random,random --games 1 --mode 4p-red-east --rule tenhou --seed 42 --out /tmp/video-tournament
+      - run: |
+          set -euo pipefail
+          game_id=$(node -e 'const fs=require("node:fs"); const x=JSON.parse(fs.readFileSync("/tmp/video-tournament/replay/index.json","utf8")); process.stdout.write(x.games[0].gameId)')
+          start=$(node -e 'const fs=require("node:fs"); const x=JSON.parse(fs.readFileSync("/tmp/video-tournament/replay/index.json","utf8")); process.stdout.write(String(x.games[0].startSequence))')
+          end=$(node -e 'const fs=require("node:fs"); const x=JSON.parse(fs.readFileSync("/tmp/video-tournament/replay/index.json","utf8")); process.stdout.write(String(Math.min(x.games[0].endSequence, x.games[0].startSequence + 4)))')
+          pnpm video:export -- --input /tmp/video-tournament --game-id "$game_id" --from "$start" --to "$end" --format mp4 --fps 5 --speed 4 --out /tmp/video-tournament/smoke.mp4
+          test -s /tmp/video-tournament/smoke.mp4
+          test -s /tmp/video-tournament/smoke.mp4.json
+          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 /tmp/video-tournament/smoke.mp4

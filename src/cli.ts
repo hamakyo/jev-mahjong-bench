@@ -18,6 +18,10 @@ import { LiveEventHub } from "./live/hub.js";
 import { SnapshotStore } from "./live/snapshot.js";
 import { createLiveServer } from "./live/server.js";
 import { TournamentControl } from "./live/control.js";
+import { createReplayServer } from "./replay/server.js";
+import { loadReplay } from "./replay/loader.js";
+import { ReplayTimeline } from "./replay/timeline.js";
+import { exportReplayVideo } from "./export/video.js";
 import type { DecisionRecord } from "./types.js";
 
 interface Flags { [key: string]: string; }
@@ -269,6 +273,7 @@ async function runTournamentWatchCommand(argv: string[]): Promise<void> {
       observer: {
         emit: (event) => snapshots.apply(hub.emit(event)),
       },
+      control,
     });
     if (exitOnComplete) await stop();
   } catch (error) {
@@ -283,6 +288,43 @@ async function runTournamentWatchCommand(argv: string[]): Promise<void> {
   }
 }
 
+async function runReplayServeCommand(argv: string[]): Promise<void> {
+  const flags = parseFlags(argv);
+  const data = await loadReplay(required(flags, "input"));
+  const timeline = new ReplayTimeline(data);
+  const host = flags.host ?? "127.0.0.1";
+  const server = createReplayServer({ timeline, host, port: integer(flags, "port", 3_000) });
+  const port = await server.listen();
+  console.log("Replay dashboard: http://" + host + ":" + port + "/");
+  await new Promise<void>((resolvePromise) => {
+    const stop = () => {
+      process.off("SIGINT", stop);
+      process.off("SIGTERM", stop);
+      void server.close().finally(resolvePromise);
+    };
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+  });
+}
+
+async function runVideoExportCommand(argv: string[]): Promise<void> {
+  const flags = parseFlags(argv);
+  const debug = booleanFlag(flags, "debug", false);
+  const output = required(flags, "out");
+  await exportReplayVideo({
+    input: required(flags, "input"),
+    gameId: required(flags, "game-id"),
+    ...(flags.from !== undefined ? { from: integer(flags, "from", 0) } : {}),
+    ...(flags.to !== undefined ? { to: integer(flags, "to", 0) } : {}),
+    format: (flags.format ?? "mp4") as "mp4" | "webm",
+    fps: integer(flags, "fps", 30),
+    speed: flags.speed === undefined ? 1 : Number.parseFloat(flags.speed),
+    out: output,
+    debug,
+  });
+  console.log("Wrote " + resolve(output) + " and metadata");
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2).filter((argument) => argument !== "--");
   const command = argv[0];
@@ -293,6 +335,8 @@ async function main(): Promise<void> {
   if (command === "reference:mortal") return runReferenceMortal(argv.slice(1));
   if (command === "tournament") return runTournamentCommand(argv.slice(1));
   if (command === "tournament:watch") return runTournamentWatchCommand(argv.slice(1));
+  if (command === "replay:serve") return runReplayServeCommand(argv.slice(1));
+  if (command === "video:export") return runVideoExportCommand(argv.slice(1));
   if (command === "hybrid:sweep") return runHybridSweep(argv.slice(1));
   throw new Error(`Unknown command: ${command}`);
 }

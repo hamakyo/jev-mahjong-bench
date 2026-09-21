@@ -47,7 +47,7 @@ export class ReplayRecorder {
   private byteOffset = 0;
   private finalized = false;
 
-  constructor(output: string, streamId = randomUUID()) {
+  constructor(output: string, streamId: string = randomUUID()) {
     this.output = resolve(output);
     this.streamId = streamId;
     this.snapshots = new SnapshotStore(streamId);
@@ -148,8 +148,8 @@ export class ReplayRecorder {
       this.games.push({
         gameId: event.gameId ?? "",
         seed: event.seed,
-        pairId: event.pairId,
-        rotationIndex: event.rotationIndex,
+        ...(event.pairId !== undefined ? { pairId: event.pairId } : {}),
+        ...(event.rotationIndex !== undefined ? { rotationIndex: event.rotationIndex } : {}),
         startSequence: sequence,
         startByteOffset: startOffset,
         hands: [],

@@ -99,6 +99,8 @@ th, td { text-align: left; padding: .55rem .45rem; border-bottom: 1px solid #2a3
 th { color: #9fb6ca; }
 .action-cell { max-width: 20rem; white-space: normal; word-break: break-word; }
 .control-row { display: flex; align-items: center; flex-wrap: wrap; gap: .65rem; }
+.replay-controls { display: flex; align-items: center; flex-wrap: wrap; gap: .65rem; }
+.replay-controls input[type="range"] { flex: 1 1 14rem; min-width: 10rem; }
 button { border: 1px solid #4e6d84; border-radius: .4rem; padding: .4rem .7rem; background: #223746; color: #edf2f7; cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .45; }
 .mode { padding: .35rem .6rem; border-radius: 999px; background: #275b70; font-size: .78rem; }
