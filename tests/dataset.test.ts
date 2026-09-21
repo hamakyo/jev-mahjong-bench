@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { link, mkdtemp, readFile, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
@@ -122,5 +122,46 @@ describe("parseDecisionSample", () => {
       await expect(splitDataset({ ...paths, ratio: 0.5, seed: 42 })).rejects.toThrow(/path overlaps/);
       expect(await readFile(input, "utf8")).toBe(before);
     }
+  });
+
+  it("rejects symlink and hardlink outputs that alias the input dataset", async () => {
+    const out = await mkdtemp(join(tmpdir(), "jev-dataset-split-link-collision-"));
+    const samples = ["a", "b"].map((id, index) => parseDecisionSample({
+      id,
+      state: { round: "E1", hand: ["1m"] },
+      legalActions: ["1m", "2m"],
+      provenance: {
+        platform: "tenhou",
+        gameIdHash: String.fromCharCode(97 + index).repeat(64),
+        handIndex: 0,
+        eventIndex: index,
+        seat: 0,
+      },
+    }));
+    const input = join(out, "input.jsonl");
+    const calibrationSymlink = join(out, "calibration-symlink.jsonl");
+    const evaluationHardlink = join(out, "evaluation-hardlink.jsonl");
+    await writeSamples(input, samples);
+    await symlink(input, calibrationSymlink);
+    await link(input, evaluationHardlink);
+    const before = await readFile(input, "utf8");
+
+    await expect(splitDataset({
+      inputPath: input,
+      calibrationOut: calibrationSymlink,
+      evaluationOut: join(out, "evaluation.jsonl"),
+      ratio: 0.5,
+      seed: 42,
+      manifestPath: join(out, "split.json"),
+    })).rejects.toThrow(/path overlaps/);
+    await expect(splitDataset({
+      inputPath: input,
+      calibrationOut: join(out, "calibration.jsonl"),
+      evaluationOut: evaluationHardlink,
+      ratio: 0.5,
+      seed: 42,
+      manifestPath: join(out, "split-hardlink.json"),
+    })).rejects.toThrow(/path overlaps/);
+    expect(await readFile(input, "utf8")).toBe(before);
   });
 });

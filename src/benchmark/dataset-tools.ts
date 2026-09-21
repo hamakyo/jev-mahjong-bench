@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
 import type { DecisionSample } from "../types.js";
 import { parseDecisionSample } from "./dataset.js";
 import { canonicalJson } from "../mjai/tiles.js";
@@ -203,7 +203,47 @@ function splitArgumentError(message: string): never {
   throw new Error(`dataset split ${message}`);
 }
 
-function normalizedSplitPaths(options: DatasetSplitOptions): DatasetSplitOptions {
+interface SplitPathIdentity {
+  label: string;
+  path: string;
+  canonicalPath: string;
+  device?: number;
+  inode?: number;
+}
+
+function isMissingPath(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
+}
+
+/** Resolve a path through the nearest existing parent without creating anything. */
+async function materializedPath(path: string): Promise<string> {
+  const missingBasenames: string[] = [basename(path)];
+  let parent = dirname(path);
+  while (true) {
+    try {
+      const existingParent = await realpath(parent);
+      return join(existingParent, ...missingBasenames);
+    } catch (error) {
+      if (!isMissingPath(error)) throw error;
+      const nextParent = dirname(parent);
+      if (nextParent === parent) return path;
+      missingBasenames.unshift(basename(parent));
+      parent = nextParent;
+    }
+  }
+}
+
+async function splitPathIdentity(label: string, path: string): Promise<SplitPathIdentity> {
+  try {
+    const [canonicalPath, fileStat] = await Promise.all([realpath(path), stat(path)]);
+    return { label, path, canonicalPath, device: fileStat.dev, inode: fileStat.ino };
+  } catch (error) {
+    if (!isMissingPath(error)) throw error;
+    return { label, path, canonicalPath: await materializedPath(path) };
+  }
+}
+
+async function normalizedSplitPaths(options: DatasetSplitOptions): Promise<DatasetSplitOptions> {
   const normalized = {
     inputPath: resolve(options.inputPath),
     calibrationOut: resolve(options.calibrationOut),
@@ -218,11 +258,18 @@ function normalizedSplitPaths(options: DatasetSplitOptions): DatasetSplitOptions
     ["evaluation output", normalized.evaluationOut],
     ["manifest", normalized.manifestPath],
   ] as const;
-  const seen = new Map<string, string>();
-  for (const [label, path] of pathEntries) {
-    const previous = seen.get(path);
-    if (previous) splitArgumentError(`${label} path overlaps ${previous}: ${path}`);
-    seen.set(path, label);
+  const identities = await Promise.all(pathEntries.map(([label, path]) => splitPathIdentity(label, path)));
+  for (let leftIndex = 0; leftIndex < identities.length; leftIndex += 1) {
+    const left = identities[leftIndex]!;
+    for (let rightIndex = leftIndex + 1; rightIndex < identities.length; rightIndex += 1) {
+      const right = identities[rightIndex]!;
+      const sameMaterializedPath = left.canonicalPath === right.canonicalPath;
+      const sameExistingFile = left.device !== undefined && left.inode !== undefined
+        && left.device === right.device && left.inode === right.inode;
+      if (sameMaterializedPath || sameExistingFile) {
+        splitArgumentError(`${right.label} path overlaps ${left.label}: ${right.path}`);
+      }
+    }
   }
   return normalized;
 }
@@ -258,7 +305,7 @@ export async function splitDataset(
       manifestPath: manifestPath ?? splitArgumentError("manifest path is required"),
     }
     : optionsOrInput;
-  const normalized = normalizedSplitPaths(options);
+  const normalized = await normalizedSplitPaths(options);
   if (!Number.isFinite(normalized.ratio) || normalized.ratio <= 0 || normalized.ratio >= 1) {
     splitArgumentError("ratio must be a finite number between 0 and 1");
   }

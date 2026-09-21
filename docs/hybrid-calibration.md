@@ -49,17 +49,31 @@ Jev confidenceの有効値は `0.50, 0.57, 0.64`。分布は min `0.500`、p10 `
 
 ## Paired full-game comparison
 
-候補2つを同じseed `42` のseat rotation 0/1で、`4p-red-half`・`tenhou`・`random` 2席と比較した。実行した候補の設定SHA-256は `hybrid@0.30=e4ab0338bfe93ac79262482d0e4ee60afb380bb4b35b2c2e7654ea3b164ff537`、`hybrid@0.50=f98789c289e49bcb6c09a394fab4d84928fc781b63d4743f611acaad9af47c6c`。paired observationは2局で、CIはpair-blockのstudent-t 95% CI、rateはWilson 95% CI。
+候補2つを、単一の完走済み`--paired-runs 1` scheduleで比較した。実行条件は次のとおり。
+
+```bash
+pnpm tournament -- \
+  --seats hybrid@0.30,hybrid@0.50,random,random \
+  --paired-runs 1 \
+  --mode 4p-red-half \
+  --rule tenhou \
+  --seed 42 \
+  --out results/issue-8-evidence/paired-full-game-valid
+```
+
+出力manifestは`status=complete`、4 games、4 rotationsで、全gameが同じ`pairId=pair-0`、`baseSeed=42`だった。rotationごとに別実行したgameや、別の`--games`実行結果をこの集計へ混ぜていない。実行した候補の設定SHA-256は `hybrid@0.30=e4ab0338bfe93ac79262482d0e4ee60afb380bb4b35b2c2e7654ea3b164ff537`、`hybrid@0.50=f98789c289e49bcb6c09a394fab4d84928fc781b63d4743f611acaad9af47c6c`。tournament config SHA-256は `3b72eec4ed9e31ba092d9aada11904c864fd252aa2eec12475dd8cbd1b27c788`。
+
+このrunはpaired observationが1 pairだけなので、score/rankの95% CIは算出していない（`—`）。rateもこの小標本の点推定として記録する。CIを根拠に候補を選ぶには、同じpaired scheduleを複数pair完走させる必要がある。
 
 | agent | games | mean score [95% CI] | mean rank [95% CI] | 1st | win | deal-in | riichi | call | escalation | p50/p95 ms | Jev input/output | GPT input/output | fallback/error |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| hybrid@0.30 | 2 | 36100 [-50301, 122501] | 1.5 [-4.853, 7.853] | 50.0% | 10.0% | 0.0% | 0.0% | 90.0% | 43.4% (195/449) | 306.8 / 2295.2 | 1113185 / 244910 | 241524 / 9727 | 0 / 0 |
-| hybrid@0.50 | 2 | 28550 [-38157, 95257] | 1.5 [-4.853, 7.853] | 50.0% | 10.0% | 0.0% | 5.0% | 90.0% | 60.8% (276/454) | 1458.0 / 2379.2 | 1180184 / 265573 | 356092 / 13875 | 0 / 0 |
+| hybrid@0.30 | 4 | 26625 [—] | 2.0 [—] | 50.0% | 2.4% | 0.0% | 0.0% | 85.7% | 40.4% (387/959) | 282.6 / 2159.4 | 2507929 / 560376 | 469865 / 19460 | 0 / 0 |
+| hybrid@0.50 | 4 | 27125 [—] | 2.0 [—] | 50.0% | 0.0% | 2.4% | 0.0% | 88.1% | 67.5% (645/956) | 1456.2 / 2298.9 | 2403565 / 529315 | 811317 / 32451 | 0 / 0 |
 
-Paired score difference (`0.30 - 0.50`) は `+7550`、95% CI `[-145557, 160657]`。rank differenceは `0.0`、95% CI `[-12.706, 12.706]`。両区間とも広く、採用判断の根拠にはしない。
+paired score difference (`0.30 - 0.50`) は `-500`、95% CIは未算出。rank differenceは `0.0`、95% CIは未算出。両候補ともfallback/errorは`0/0`だった。これらは1 pairの点推定であり、採用判断の根拠にはしない。
 
 ### Decision
 
-`0.30` と `0.50` は、calibration frontierから事前に選び、held-outとfull-gameで比較する候補として採用した。toy fixtureのheld-outではagreementは同率だが、`0.30` はescalation、GPT tokens、estimated latencyが少なく、full-gameでも同じ方向だった。一方、実測数が少なくCIも広いため、production default `0.75` は変更しない。production datasetで同じ手順を再実行し、十分なgame/pair数を得た後にdefault変更を別コミットで判断する。
+`0.30` と `0.50` は、calibration frontierから事前に選び、held-outとfull-gameで比較する候補として採用した。toy fixtureのheld-outではagreementは同率だが、`0.30` はescalation、GPT tokens、estimated latencyが少ない。full-gameの1 pairではscore差は`-500`で、CIを算出できる数ではない。したがって、production default `0.75` は変更しない。production datasetで同じ手順を複数pair完走させ、十分なgame/pair数を得た後にdefault変更を別コミットで判断する。
 
 再現用のraw成果物はローカルの `results/issue-8-evidence/` に保存している。providerのraw responseをリポジトリへ追加せず、上記hashと集計値をこの文書へ固定した。
