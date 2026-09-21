@@ -379,9 +379,14 @@ function meldView(event: Record<string, unknown>, actor?: number): MeldView | un
     ? event.consumed.filter((tile): tile is string => typeof tile === "string")
     : [];
   const pai = typeof event.pai === "string" ? event.pai : undefined;
+  const calledTileIndex = pai && type !== "ankan"
+    ? calledTileIndexForSource(actor, playerIndex(event.target), consumed.length + 1)
+    : undefined;
   const tiles = type === "ankan"
     ? (consumed.length ? consumed : pai ? [pai, pai, pai, pai] : [])
-    : [...consumed, ...(pai ? [pai] : [])];
+    : calledTileIndex === undefined || pai === undefined
+      ? [...consumed, ...(pai ? [pai] : [])]
+      : [...consumed.slice(0, calledTileIndex), pai, ...consumed.slice(calledTileIndex)];
   if (!tiles.length) return undefined;
   const target = playerIndex(event.target);
   const view: MeldView = { type, tiles };
@@ -389,7 +394,6 @@ function meldView(event: Record<string, unknown>, actor?: number): MeldView | un
   if (type === "ankan") {
     view.concealedIndexes = [0, 3];
   } else if (pai) {
-    const calledTileIndex = calledTileIndexForSource(actor, target, tiles.length);
     if (calledTileIndex !== undefined) view.calledTileIndex = calledTileIndex;
   }
   return view;
@@ -419,6 +423,7 @@ function updateMjai(snapshot: MutableSnapshot, event: Record<string, unknown>): 
     snapshot.honba = numberValue(event.honba);
     snapshot.kyotaku = numberValue(event.kyotaku);
     snapshot.oya = playerIndex(event.oya) ?? null;
+    snapshot.currentSeat = snapshot.oya;
     snapshot.scores = Array.isArray(event.scores) ? event.scores.map((value) => numberValue(value)) : [];
     snapshot.discards = Object.fromEntries(SEATS.map((seat) => [seat, []]));
     snapshot.melds = Object.fromEntries(SEATS.map((seat) => [seat, []]));
@@ -452,11 +457,12 @@ function updateMjai(snapshot: MutableSnapshot, event: Record<string, unknown>): 
     if (view) {
       const melds = snapshot.meldsByPlayer[actor] ?? [];
       if (view.type === "kakan") {
-        const addedKind = view.tiles.at(-1) ? tileKind(view.tiles.at(-1)!) : undefined;
+        const addedTile = typeof event.pai === "string" ? event.pai : undefined;
+        const addedKind = addedTile ? tileKind(addedTile) : undefined;
         const existing = addedKind === undefined ? undefined : melds.find((meld) => meld.type === "pon" && meld.tiles.some((tile) => tileKind(tile) === addedKind));
-        if (existing) {
+        if (existing && addedTile) {
           existing.type = "kakan";
-          existing.tiles = [...existing.tiles, ...(view.tiles.at(-1) ? [view.tiles.at(-1)!] : [])];
+          existing.tiles = [...existing.tiles, addedTile];
         } else {
           melds.push(view);
         }

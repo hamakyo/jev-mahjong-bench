@@ -47,6 +47,7 @@ describe("table presentation", () => {
     expect(snapshot.table.seats.right).toMatchObject({ playerIndex: 1, agentId: "duplicate", currentWind: "E", isDealer: true });
     expect(snapshot.table.seats.top).toMatchObject({ playerIndex: 2, currentWind: "S" });
     expect(snapshot.table.seats.left).toMatchObject({ playerIndex: 3, currentWind: "W" });
+    expect(snapshot.currentSeat).toBe(1);
   });
 
   it("keeps spectator hand data to counts while debug reconstructs raw tiles", () => {
@@ -97,6 +98,20 @@ describe("table presentation", () => {
     expect(table.seats.top.melds[1]).toMatchObject({ type: "pon", fromPlayer: 1, calledTileIndex: 0 });
     expect(tableStateRendererJs).toContain("meld.fromPlayer");
     expect(tableStateRendererJs).toContain("renderMeld(meld, seat.playerIndex)");
+  });
+
+  it("inserts the called pai at the source-facing position", () => {
+    const hub = new LiveEventHub({ streamId: "called-tile-stream" });
+    const store = new SnapshotStore(hub.streamId);
+    const apply = (event: Parameters<LiveEventHub["emit"]>[0]) => store.apply(hub.emit(event));
+    apply({ type: "game:start", ...base, seed: 1, baseSeed: 1, seats: ["a", "b", "c", "d"], gameIndex: 0, totalGames: 1 });
+    apply(mjai({ type: "start_kyoku", oya: 0, tehais: startingHands() }));
+    apply(mjai({ type: "chi", actor: 0, target: 3, pai: "3m", consumed: ["1m", "2m"] }));
+    apply(mjai({ type: "pon", actor: 0, target: 1, pai: "0p", consumed: ["5p", "5p"] }));
+
+    const melds = store.getSnapshot("spectator").table.seats.bottom.melds;
+    expect(melds[0]).toMatchObject({ tiles: ["3m", "1m", "2m"], calledTileIndex: 0, fromPlayer: 3 });
+    expect(melds[1]).toMatchObject({ tiles: ["5p", "5p", "0p"], calledTileIndex: 2, fromPlayer: 1 });
   });
 
   it("does not restore legacy checkpoints without a presentation version", () => {
