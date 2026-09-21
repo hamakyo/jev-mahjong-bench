@@ -272,6 +272,22 @@ describe("Hybrid threshold sweep", () => {
     expect(loaded.calls[0]?.jev.confidence).toBe(0.5);
     expect(() => evaluateHybridThresholds(samples.map((item) => ({ ...item, legalActions: ["a", "b", "c"] })), cache, [0.5])).toThrow(/legal actions hash mismatch/);
     expect(() => evaluateHybridThresholds(samples, cache, [0.5], { datasetSha256: "wrong" })).toThrow(/dataset SHA-256 mismatch/);
+
+    const rowWithChangedJevModel = {
+      ...cache,
+      calls: cache.calls.map((row, index) => index === 1
+        ? { ...row, models: { ...row.models, jev: { ...row.models.jev, model: "jev-other" } } }
+        : row),
+    };
+    expect(() => evaluateHybridThresholds(samples, rowWithChangedJevModel, [0.5])).toThrow(/row cache-b Jev model settings mismatch/);
+
+    const rowWithChangedGptReasoning = {
+      ...cache,
+      calls: cache.calls.map((row, index) => index === 1
+        ? { ...row, gptReasoningEffort: "high" }
+        : row),
+    };
+    expect(() => evaluateHybridThresholds(samples, rowWithChangedGptReasoning, [0.5])).toThrow(/row cache-b GPT model aliases mismatch/);
   });
 
   it("separates valid Jev confidence distribution buckets and invalid categories", async () => {

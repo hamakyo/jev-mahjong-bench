@@ -92,4 +92,35 @@ describe("parseDecisionSample", () => {
       gameIdHashOverlapCount: 0,
     });
   });
+
+  it("rejects every normalized input/output/manifest path collision before writing", async () => {
+    const out = await mkdtemp(join(tmpdir(), "jev-dataset-split-collision-"));
+    const samples = ["a", "b"].map((id, index) => parseDecisionSample({
+      id,
+      state: { round: "E1", hand: ["1m"] },
+      legalActions: ["1m", "2m"],
+      provenance: {
+        platform: "tenhou",
+        gameIdHash: String.fromCharCode(97 + index).repeat(64),
+        handIndex: 0,
+        eventIndex: index,
+        seat: 0,
+      },
+    }));
+    const input = join(out, "input.jsonl");
+    const calibration = join(out, "calibration.jsonl");
+    const evaluation = join(out, "evaluation.jsonl");
+    const manifest = join(out, "split.json");
+    await writeSamples(input, samples);
+    const before = await readFile(input, "utf8");
+    const cases = [
+      { inputPath: input, calibrationOut: input, evaluationOut: evaluation, manifestPath: manifest },
+      { inputPath: input, calibrationOut: calibration, evaluationOut: calibration, manifestPath: manifest },
+      { inputPath: input, calibrationOut: calibration, evaluationOut: evaluation, manifestPath: input },
+    ];
+    for (const paths of cases) {
+      await expect(splitDataset({ ...paths, ratio: 0.5, seed: 42 })).rejects.toThrow(/path overlaps/);
+      expect(await readFile(input, "utf8")).toBe(before);
+    }
+  });
 });

@@ -467,6 +467,21 @@ function modelsFromCache(cache: HybridSweepCache): HybridSweepCache["models"] {
   };
 }
 
+function assertProviderMetadata(
+  actual: HybridSweepProviderMetadata | undefined,
+  expected: HybridSweepProviderMetadata,
+  label: string,
+): void {
+  if (!actual
+    || actual.model !== expected.model
+    || actual.reasoningEffort !== expected.reasoningEffort) {
+    throw new Error(
+      `hybrid sweep cache ${label} mismatch: expected ${expected.model}/${expected.reasoningEffort}, `
+      + `got ${actual?.model ?? "<missing>"}/${actual?.reasoningEffort ?? "<missing>"}`,
+    );
+  }
+}
+
 function callsFromCache(cache: HybridSweepCache): HybridSweepCacheRow[] {
   return cache.calls ?? cache.rows ?? cache.samples ?? [];
 }
@@ -482,6 +497,18 @@ export function validateHybridSweepCache(
     throw new Error(`hybrid sweep cache schema mismatch: expected ${HYBRID_SWEEP_CACHE_SCHEMA_VERSION}`);
   }
   const models = modelsFromCache(cache);
+  if (cache.jevModel !== undefined && cache.jevModel !== models.jev.model) {
+    throw new Error(`hybrid sweep cache top-level Jev model alias mismatch: expected ${models.jev.model}, got ${cache.jevModel}`);
+  }
+  if (cache.jevReasoningEffort !== undefined && cache.jevReasoningEffort !== models.jev.reasoningEffort) {
+    throw new Error(`hybrid sweep cache top-level Jev reasoning effort alias mismatch: expected ${models.jev.reasoningEffort}, got ${cache.jevReasoningEffort}`);
+  }
+  if (cache.gptModel !== undefined && cache.gptModel !== models.gpt.model) {
+    throw new Error(`hybrid sweep cache top-level GPT model alias mismatch: expected ${models.gpt.model}, got ${cache.gptModel}`);
+  }
+  if (cache.gptReasoningEffort !== undefined && cache.gptReasoningEffort !== models.gpt.reasoningEffort) {
+    throw new Error(`hybrid sweep cache top-level GPT reasoning effort alias mismatch: expected ${models.gpt.reasoningEffort}, got ${cache.gptReasoningEffort}`);
+  }
   for (const kind of ["jev", "gpt"] as const) {
     const expected = options.models?.[kind];
     if (!expected) continue;
@@ -503,6 +530,14 @@ export function validateHybridSweepCache(
     }
     if (call.cacheSchemaVersion !== HYBRID_SWEEP_CACHE_SCHEMA_VERSION || call.datasetSha256 !== cache.datasetSha256) {
       throw new Error(`hybrid sweep cache row signature mismatch for sample ${sample.id}`);
+    }
+    assertProviderMetadata(call.models?.jev, models.jev, `row ${sample.id} Jev model settings`);
+    assertProviderMetadata(call.models?.gpt, models.gpt, `row ${sample.id} GPT model settings`);
+    if (call.jevModel !== models.jev.model || call.jevReasoningEffort !== models.jev.reasoningEffort) {
+      throw new Error(`hybrid sweep cache row ${sample.id} Jev model aliases mismatch`);
+    }
+    if (call.gptModel !== models.gpt.model || call.gptReasoningEffort !== models.gpt.reasoningEffort) {
+      throw new Error(`hybrid sweep cache row ${sample.id} GPT model aliases mismatch`);
     }
     const expectedLegalActionsHash = stableSha256(sample.legalActions);
     if (call.legalActionsHash !== expectedLegalActionsHash) {

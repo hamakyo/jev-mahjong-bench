@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import type { DecisionSample } from "../types.js";
 import { parseDecisionSample } from "./dataset.js";
 import { canonicalJson } from "../mjai/tiles.js";
@@ -203,6 +203,30 @@ function splitArgumentError(message: string): never {
   throw new Error(`dataset split ${message}`);
 }
 
+function normalizedSplitPaths(options: DatasetSplitOptions): DatasetSplitOptions {
+  const normalized = {
+    inputPath: resolve(options.inputPath),
+    calibrationOut: resolve(options.calibrationOut),
+    evaluationOut: resolve(options.evaluationOut),
+    ratio: options.ratio,
+    seed: options.seed,
+    manifestPath: resolve(options.manifestPath),
+  };
+  const pathEntries = [
+    ["dataset", normalized.inputPath],
+    ["calibration output", normalized.calibrationOut],
+    ["evaluation output", normalized.evaluationOut],
+    ["manifest", normalized.manifestPath],
+  ] as const;
+  const seen = new Map<string, string>();
+  for (const [label, path] of pathEntries) {
+    const previous = seen.get(path);
+    if (previous) splitArgumentError(`${label} path overlaps ${previous}: ${path}`);
+    seen.set(path, label);
+  }
+  return normalized;
+}
+
 /**
  * Deterministically split a JSONL dataset at the provenance game boundary.
  * Samples without provenance are isolated into one group each.
@@ -234,12 +258,13 @@ export async function splitDataset(
       manifestPath: manifestPath ?? splitArgumentError("manifest path is required"),
     }
     : optionsOrInput;
-  if (!Number.isFinite(options.ratio) || options.ratio <= 0 || options.ratio >= 1) {
+  const normalized = normalizedSplitPaths(options);
+  if (!Number.isFinite(normalized.ratio) || normalized.ratio <= 0 || normalized.ratio >= 1) {
     splitArgumentError("ratio must be a finite number between 0 and 1");
   }
-  if (!Number.isInteger(options.seed)) splitArgumentError("seed must be an integer");
-  const inputBytes = await readFile(options.inputPath);
-  const { samples } = await readDatasetSamples(options.inputPath);
+  if (!Number.isInteger(normalized.seed)) splitArgumentError("seed must be an integer");
+  const inputBytes = await readFile(normalized.inputPath);
+  const { samples } = await readDatasetSamples(normalized.inputPath);
   const groups = new Map<string, DecisionSample[]>();
   for (const sample of samples) {
     const key = sampleGameKey(sample);
@@ -250,21 +275,21 @@ export async function splitDataset(
   if (groups.size < 2) splitArgumentError("requires at least two game groups");
 
   const shuffled = [...groups.keys()].sort();
-  const random = splitRandom(options.seed);
+  const random = splitRandom(normalized.seed);
   for (let index = shuffled.length - 1; index > 0; index -= 1) {
     const swapIndex = Math.floor(random() * (index + 1));
     [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex]!, shuffled[index]!];
   }
   const calibrationGroupCount = Math.min(
     shuffled.length - 1,
-    Math.max(1, Math.floor(shuffled.length * options.ratio)),
+    Math.max(1, Math.floor(shuffled.length * normalized.ratio)),
   );
   const calibrationKeys = new Set(shuffled.slice(0, calibrationGroupCount));
   const calibration = samples.filter((sample) => calibrationKeys.has(sampleGameKey(sample)));
   const evaluation = samples.filter((sample) => !calibrationKeys.has(sampleGameKey(sample)));
   await Promise.all([
-    writeSamples(options.calibrationOut, calibration),
-    writeSamples(options.evaluationOut, evaluation),
+    writeSamples(normalized.calibrationOut, calibration),
+    writeSamples(normalized.evaluationOut, evaluation),
   ]);
   const calibrationSha256 = await sha256File(options.calibrationOut);
   const evaluationSha256 = await sha256File(options.evaluationOut);
@@ -282,12 +307,12 @@ export async function splitDataset(
     evaluationGameCount: new Set(evaluation.map(sampleGameKey)).size,
     calibration: { samples: calibration.length, games: new Set(calibration.map(sampleGameKey)).size },
     evaluation: { samples: evaluation.length, games: new Set(evaluation.map(sampleGameKey)).size },
-    seed: options.seed,
-    ratio: options.ratio,
+    seed: normalized.seed,
+    ratio: normalized.ratio,
     gameIdHashOverlap: overlapCount > 0,
     gameIdHashOverlapCount: overlapCount,
   };
-  await mkdir(dirname(options.manifestPath), { recursive: true });
-  await writeFile(options.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  await mkdir(dirname(normalized.manifestPath), { recursive: true });
+  await writeFile(normalized.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   return manifest;
 }
