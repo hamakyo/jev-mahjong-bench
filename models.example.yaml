@@ -5,6 +5,8 @@ models:
     provider: openai
     model: gpt-5.6-luna
     reasoningEffort: none
+    # Optional for every generic provider; defaults to 128.
+    maxOutputTokens: 128
     apiKeyEnv: OPENAI_API_KEY
 
   claude-sonnet:
@@ -29,4 +31,3 @@ models:
     headers:
       X-Provider-Project:
         env: EXAMPLE_PROJECT
-

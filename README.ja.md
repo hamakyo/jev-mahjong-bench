@@ -51,18 +51,21 @@ pnpm web -- --port 3001
 
 Web UIは別のベンチマーク実装を持たず、既存のCLI経路を起動します。Tournament、
 Decision benchmark、Hybrid sweepを作成でき、各Runの設定、状態、canonicalな結果、
-ログ、成果物、Live、Replayへの導線をRun詳細に集約します。Run metadataは
+成果物、Live、Replayへの導線をRun詳細に集約します。subprocessのstdout/stderrログは
+Run metadataと同じディレクトリへ保存します。Run metadataは
 `results/runs/<run-id>/run.json`へ原子的に保存し、`--runs-dir <path>`で保存先を
-変更できます。
+変更できます。Hybrid sweep formの既定候補はCLIと同じ
+`0.20,0.25,0.30,0.35,0.40,0.50`です。
 
 各Runには安定したconfig hashがあります。control planeの停止時に実行中だったRunは、
 再起動時にfailedとして明示されますが、ログと既存成果物は保持します。既定のbind先は
 `127.0.0.1`で認証機能はないため、信頼できないネットワークへ公開しないでください。
 
-APIは`GET/POST /api/runs`、Run詳細・結果・成果物・対局一覧、cancel、Run単位の
-Live snapshot／SSE／control endpointを提供します。`GET /api/models`が返すのは
-provider/model ID、credential設定有無などの安全なmetadataだけで、credential値は
-返しません。
+APIは`GET/POST /api/runs`、`GET /api/runs/:runId`、Run単位の`report`、
+`artifacts`、`artifact?path=...`、`games`、`cancel`、`replay`を提供します。
+Live用には`snapshot`、`events`、`control`、`control/pause`、`control/resume`、
+`control/step`があります。`GET /api/models`が返すのはprovider/model ID、credential
+設定有無などの安全なmetadataだけで、credential値は返しません。
 
 ## 判断ベンチマーク
 
@@ -297,7 +300,8 @@ GPTは判断用と完全対局用で共通のResponses API request経路を使�
 429/503は最大3回、retry総予算30秒まで再試行し、`Retry-After`を優先します。
 指定がない場合は上限付き指数backoffとjitterを使います。quota、billing、spend
 limitなどの恒久的エラーは再試行しません。試行回数、status、request ID、backoff
-合計は判断metadataに保存し、`max_output_tokens`は128に固定します。
+合計は判断metadataに保存します。汎用providerの出力token上限は既定で128ですが、
+model registryの`maxOutputTokens`でmodelごとに変更できます。
 
 ## Jev確信度Hybrid
 
@@ -399,6 +403,9 @@ canonical input bytes、request ID、retry回数、共通usageを保存します
 headerの実値は保存せず、headerも環境変数参照だけを許可します。既存の`gpt`、`jev`、
 `mortal`、`random`、`hybrid`は互換維持されます。Hybridのfallbackは
 `--hybrid-fallback <model-id>`で差し替えられます。
+
+`maxOutputTokens`は全ての汎用providerで利用できます。`reasoningEffort`は現在、
+OpenAI定義だけに対応します。
 
 CLIでは`--models <path>`でモデルregistry、`--pricing <path>`で固定した価格snapshotを
 指定できます。価格が不足しているモデルのcostは推測せず`undefined`として出力します。

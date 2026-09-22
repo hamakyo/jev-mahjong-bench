@@ -66,9 +66,10 @@ pnpm web -- --port 3001
 The Web UI launches the existing CLI workflows rather than maintaining a
 second benchmark implementation. It supports tournament, decision-benchmark,
 and Hybrid-sweep runs; persists each run under `results/runs/<run-id>/run.json`;
-and exposes configuration, status, canonical results, logs, artifacts, Live,
-and Replay from the run detail page. A different store can be selected with
-`--runs-dir <path>`.
+stores subprocess stdout/stderr beside that metadata; and exposes configuration,
+status, canonical results, artifacts, Live, and Replay from the run detail page.
+A different store can be selected with `--runs-dir <path>`. The Hybrid-sweep
+form uses the same `0.20,0.25,0.30,0.35,0.40,0.50` defaults as the CLI.
 
 Run metadata is written atomically and includes a stable configuration hash.
 An interrupted `queued` or `running` run is marked failed when the control
@@ -76,10 +77,12 @@ plane restarts, while its logs and benchmark artifacts are preserved. The
 server binds to `127.0.0.1` by default and has no authentication, so it should
 not be exposed to an untrusted network.
 
-The API includes `GET/POST /api/runs`, run detail/results/artifacts/games,
-`POST /api/runs/:runId/cancel`, and run-scoped Live snapshot, SSE, and control
-routes. `GET /api/models` reports only safe model metadata and credential
-availability; it never returns credential values.
+The API includes `GET/POST /api/runs`; `GET /api/runs/:runId`; run-scoped
+`report`, `artifacts`, `artifact?path=...`, and `games` reads; `POST` routes for
+`cancel` and `replay`; and Live `snapshot`, `events`, `control`,
+`control/pause`, `control/resume`, and `control/step` routes. `GET /api/models`
+reports only safe model metadata and credential availability; it never returns
+credential values.
 
 ### Run Jev and GPT
 
@@ -166,6 +169,8 @@ should not be redistributed without checking those terms.
 
 ## CLI
 
+Key options (availability depends on the selected command):
+
 ```text
 --agents <list>       jev,gpt,hybrid,hybrid@0.30,mortal,random
 --dataset <path>      JSONL dataset
@@ -176,10 +181,15 @@ should not be redistributed without checking those terms.
 --hybrid-fallback <id> registered model used by hybrid escalation (default: gpt)
 --models <path>       YAML model registry for pluggable providers
 --pricing <path>      pinned YAML pricing snapshot
+--games <n>           tournament game count (default: 1)
 --paired-runs <n>     paired tournament seed blocks (exclusive with --games)
---port <n>            watch server port; 0 selects an ephemeral port
+--seat-policy <mode>  rotate or fixed (default: rotate)
+--timeout-ms <n>      tournament decision timeout (default: 60000)
+--host <host>         local server bind host (default: 127.0.0.1)
+--port <n>            Live/Replay default: 3000; Web UI default: 3001; 0 is ephemeral
 --exit-on-complete <bool> watch-only flag for CI smoke tests
---runs-dir <path>    Web UI run metadata/artifact root (default: results/runs)
+--locale <en|ja>      deterministic video locale (default: en)
+--runs-dir <path>     Web UI run metadata/artifact root (default: results/runs)
 ```
 
 Mortal is configured with a JSON file. `command` is an argv array (never a
@@ -360,7 +370,8 @@ Temporary 429/503 responses are retried at most three times with a 30-second
 retry budget, preferring `Retry-After` and otherwise using bounded exponential
 backoff with jitter. Quota, billing, spend-limit, and other permanent errors
 are not retried. Retry attempts, statuses, request IDs, and total backoff are
-kept in decision metadata; `max_output_tokens` is fixed at 128.
+kept in decision metadata. Generic providers default to 128 output tokens;
+each model may override that limit with `maxOutputTokens` in the registry.
 
 For a paired benchmark, use `--paired-runs` instead of `--games`. Each base
 seed runs every unique circular seat rotation, so four distinct agents produce
@@ -545,6 +556,8 @@ normalized usage are saved in artifacts. API key values and custom header
 values are never serialized; headers must reference an environment variable.
 `gpt`, `jev`, `mortal`, `random`, and `hybrid` remain backwards-compatible.
 Use `--hybrid-fallback <model-id>` to inject a registered fallback model.
+`maxOutputTokens` applies to every generic provider; `reasoningEffort` is
+currently supported only by OpenAI definitions.
 
 ## References
 

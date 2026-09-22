@@ -4,6 +4,7 @@ import { access } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join, resolve } from "node:path";
 import { RunStore, type RunRecord, type RunType } from "./run-store.js";
+import { DEFAULT_HYBRID_THRESHOLDS } from "../benchmark/hybrid-sweep.js";
 
 export interface CreateRunInput {
   type: RunType;
@@ -92,7 +93,7 @@ function normalizeBenchmark(input: Record<string, unknown>): Record<string, unkn
 function normalizeSweep(input: Record<string, unknown>): Record<string, unknown> {
   const thresholds = Array.isArray(input.thresholds)
     ? input.thresholds.map((value) => numberValue(value, "thresholds[]", 0, 0, 1))
-    : stringValue(input.thresholds, "thresholds", "0,0.1,0.2,0.3,0.5,0.7,1")
+    : stringValue(input.thresholds, "thresholds", DEFAULT_HYBRID_THRESHOLDS.join(","))
       .split(",").map((value) => numberValue(Number(value.trim()), "thresholds[]", 0, 0, 1));
   if (!thresholds.length) throw new Error("thresholds cannot be empty");
   const config: Record<string, unknown> = {

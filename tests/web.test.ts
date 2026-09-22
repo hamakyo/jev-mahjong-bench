@@ -9,7 +9,8 @@ import { LiveEventHub } from "../src/live/hub.js";
 import { SnapshotStore } from "../src/live/snapshot.js";
 import { TournamentControl } from "../src/live/control.js";
 import { createLiveServer } from "../src/live/server.js";
-import { webDashboardJs } from "../src/server/dashboard.js";
+import { webDashboardHtml, webDashboardJs } from "../src/server/dashboard.js";
+import { DEFAULT_HYBRID_THRESHOLDS } from "../src/benchmark/hybrid-sweep.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -26,6 +27,7 @@ afterEach(async () => {
 describe("Web UI run orchestration", () => {
   it("ships syntactically valid browser JavaScript", () => {
     expect(() => new Function(webDashboardJs)).not.toThrow();
+    expect(webDashboardHtml).toContain(`value="${DEFAULT_HYBRID_THRESHOLDS.join(",")}"`);
   });
 
   it("normalizes supported run types and rejects unsafe shapes", () => {
@@ -49,6 +51,8 @@ describe("Web UI run orchestration", () => {
       config: { seats: ["random"], games: 1 },
     })).toThrow("exactly four");
     expect(() => normalizeRunInput({ type: "unknown" as "benchmark", config: {} })).toThrow("type must be");
+    expect(normalizeRunInput({ type: "hybrid-sweep", config: {} }).config.thresholds)
+      .toEqual([...DEFAULT_HYBRID_THRESHOLDS]);
   });
 
   it("persists stable config hashes and recovers interrupted runs", async () => {

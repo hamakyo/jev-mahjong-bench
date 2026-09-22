@@ -1,3 +1,5 @@
+import { DEFAULT_HYBRID_THRESHOLDS } from "../benchmark/hybrid-sweep.js";
+
 export const webDashboardHtml = `<!doctype html>
 <html lang="en">
   <head>
@@ -39,7 +41,7 @@ export const webDashboardHtml = `<!doctype html>
           </div>
           <div data-fields="hybrid-sweep" class="field-group" hidden>
             <label class="wide">Dataset<input name="sweepDataset" value="datasets/sample.jsonl"></label>
-            <label class="wide">Thresholds<input name="thresholds" value="0,0.1,0.2,0.3,0.5,0.7,1"></label>
+            <label class="wide">Thresholds<input name="thresholds" value="${DEFAULT_HYBRID_THRESHOLDS.join(",")}"></label>
             <label class="wide">Existing cache (optional)<input name="cacheIn" placeholder="results/calibration/provider-calls.jsonl"></label>
           </div>
           <details class="advanced"><summary>Provider and Hybrid options</summary><div class="field-group">
