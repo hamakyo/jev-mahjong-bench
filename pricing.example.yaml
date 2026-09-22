@@ -1,0 +1,15 @@
+# A pinned pricing snapshot. Values are USD per 1,000 tokens.
+snapshotId: example-2026-09-22
+asOf: 2026-09-22
+currency: USD
+models:
+  openai-luna:
+    inputPer1kTokens: 0.001
+    outputPer1kTokens: 0.004
+    cacheReadInputPer1kTokens: 0.0005
+  claude-sonnet:
+    inputPer1kTokens: 0.003
+    outputPer1kTokens: 0.015
+  deepseek:
+    inputPer1kTokens: 0.00028
+    outputPer1kTokens: 0.00042

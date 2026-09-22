@@ -1,4 +1,6 @@
 import type { AgentSummary, DecisionRecord } from "../types.js";
+import type { ProviderCallRecord } from "../providers/types.js";
+import { costPerDecisionUsd, type PricingSnapshot } from "../providers/pricing.js";
 
 const mean = (xs: number[]) => xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0;
 function percentile(xs: number[], q: number): number {
@@ -38,7 +40,7 @@ function brier(records: DecisionRecord[]): number | undefined {
   return scores.length ? mean(scores) : undefined;
 }
 
-export function summarize(agentId: string, records: DecisionRecord[]): AgentSummary {
+export function summarize(agentId: string, records: DecisionRecord[], pricing?: PricingSnapshot): AgentSummary {
   const successes = records.filter((r) => !r.error).length;
   const refs = records.filter((r) => typeof r.referenceAction === "string");
   const matches = refs.filter((r) => r.isMatch === true).length;
@@ -57,6 +59,51 @@ export function summarize(agentId: string, records: DecisionRecord[]): AgentSumm
     inputTokens: records.reduce((s, r) => s + (r.inputTokens ?? 0), 0),
     outputTokens: records.reduce((s, r) => s + (r.outputTokens ?? 0), 0),
   };
+  const providerCalls: ProviderCallRecord[] = records.flatMap((record) => record.providerCalls ?? []);
+  if (providerCalls.length) {
+    const usageReported = providerCalls.filter((call) => call.usage !== undefined);
+    const sumField = (field: "inputTokens" | "outputTokens" | "totalTokens" | "cachedInputTokens" | "reasoningTokens"): number | undefined => {
+      const values = providerCalls.flatMap((call) => typeof call.usage?.[field] === "number" ? [call.usage[field]!] : []);
+      return values.length ? values.reduce((sum, value) => sum + value, 0) : undefined;
+    };
+    const input = sumField("inputTokens");
+    const output = sumField("outputTokens");
+    const total = sumField("totalTokens");
+    const cached = sumField("cachedInputTokens");
+    const reasoning = sumField("reasoningTokens");
+    const providerLatencies = providerCalls.map((call) => call.latencyMs);
+    const canonicalBytes = providerCalls.map((call) => call.canonicalInputBytes);
+    out.providerDecisionCount = providerCalls.length;
+    out.modelDecisionCount = providerCalls.reduce((sum, call) => sum + call.logicalCallCount, 0);
+    out.usageReportedDecisionCount = usageReported.length;
+    out.latencyP50Ms = percentile(providerLatencies, 0.5);
+    out.latencyP95Ms = percentile(providerLatencies, 0.95);
+    if (records.length) out.canonicalInputBytesPerDecision = canonicalBytes.reduce((sum, value) => sum + value, 0) / records.length;
+    if (pricing) {
+      const cost = costPerDecisionUsd(providerCalls, pricing, records.length);
+      if (cost !== undefined) out.costPerDecisionUsd = cost;
+    }
+    if (input !== undefined) {
+      out.inputTokens = input;
+      if (records.length) out.inputTokensPerDecision = input / records.length;
+    }
+    if (output !== undefined) {
+      out.outputTokens = output;
+      if (records.length) out.outputTokensPerDecision = output / records.length;
+    }
+    if (total !== undefined) {
+      out.totalTokens = total;
+      if (records.length) out.totalTokensPerDecision = total / records.length;
+    }
+    if (cached !== undefined) {
+      out.cachedInputTokens = cached;
+      if (records.length) out.cachedInputTokensPerDecision = cached / records.length;
+    }
+    if (reasoning !== undefined) {
+      out.reasoningTokens = reasoning;
+      if (records.length) out.reasoningTokensPerDecision = reasoning / records.length;
+    }
+  }
   if (refs.length) out.exactMatchRate = matches / refs.length;
   if (conf.length) out.averageConfidence = mean(conf);
   const calibration = ece(records); if (calibration !== undefined) out.referenceEce = calibration;

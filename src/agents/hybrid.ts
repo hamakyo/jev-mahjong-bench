@@ -9,6 +9,7 @@ import { GptAgent } from "./gpt.js";
 import { JevAgent } from "./jev.js";
 import type { MahjongAgent } from "./agent.js";
 import { inspectGameDecisionInput } from "../game/input.js";
+import type { ProviderCallRecord, ProviderRequestError } from "../providers/types.js";
 
 export const DEFAULT_HYBRID_THRESHOLD = 0.75;
 
@@ -37,6 +38,7 @@ export interface HybridProviderRecord {
   latencyMs: number;
   usage: TokenUsage;
   metadata?: Record<string, unknown>;
+  providerCalls?: ProviderCallRecord[];
   error?: string;
 }
 
@@ -104,6 +106,7 @@ function providerRecord(
   latencyMs: number,
   error?: string,
   failureMetadata?: Record<string, unknown>,
+  failureProviderCalls?: ProviderCallRecord[],
 ): HybridProviderRecord {
   const confidence = typeof decision?.confidence === "number" && Number.isFinite(decision.confidence)
     ? decision.confidence
@@ -113,6 +116,7 @@ function providerRecord(
     confidence,
     latencyMs,
     usage: usage(decision?.usage),
+    ...(decision?.providerCalls ? { providerCalls: structuredClone(decision.providerCalls) } : failureProviderCalls ? { providerCalls: structuredClone(failureProviderCalls) } : {}),
     ...(decision?.metadata ? { metadata: decision.metadata } : failureMetadata ? { metadata: failureMetadata } : {}),
     ...(error ? { error } : {}),
   };
@@ -128,6 +132,19 @@ function errorMetadata(value: unknown): Record<string, unknown> | undefined {
   return metadata && typeof metadata === "object" && !Array.isArray(metadata)
     ? metadata as Record<string, unknown>
     : undefined;
+}
+
+function providerCallsFromHybridMetadata(metadata: Record<string, unknown> | undefined): ProviderCallRecord[] | undefined {
+  const hybrid = metadata?.hybrid;
+  if (!hybrid || typeof hybrid !== "object" || Array.isArray(hybrid)) return undefined;
+  const calls: ProviderCallRecord[] = [];
+  for (const provider of ["jev", "gpt"] as const) {
+    const record = (hybrid as Record<string, unknown>)[provider];
+    if (!record || typeof record !== "object" || Array.isArray(record)) continue;
+    const providerCalls = (record as Record<string, unknown>).providerCalls;
+    if (Array.isArray(providerCalls)) calls.push(...structuredClone(providerCalls) as ProviderCallRecord[]);
+  }
+  return calls.length ? calls : undefined;
 }
 
 function hybridFailure(
@@ -183,14 +200,18 @@ export async function runHybridDecision<T>(
   let jevDecision: AgentDecision | undefined;
   let jevError: string | undefined;
   let jevFailureMetadata: Record<string, unknown> | undefined;
+  let jevFailureProviderCalls: ProviderCallRecord[] | undefined;
   try {
     jevDecision = await calls.jev(input, signal);
   } catch (error) {
     jevError = errorText(error);
     jevFailureMetadata = errorMetadata(error);
+    if (error && typeof error === "object" && "providerCall" in error) {
+      jevFailureProviderCalls = [structuredClone((error as ProviderRequestError).providerCall)];
+    }
   }
   const jevLatency = performance.now() - jevStarted;
-  const jevRecord = providerRecord(jevDecision, jevLatency, jevError, jevFailureMetadata);
+  const jevRecord = providerRecord(jevDecision, jevLatency, jevError, jevFailureMetadata, jevFailureProviderCalls);
   const jevLegal = typeof jevDecision?.action === "string" && legalActions.includes(jevDecision.action);
   const confidence = jevDecision?.confidence;
   const confidenceValid = typeof confidence === "number" && Number.isFinite(confidence) && confidence >= 0 && confidence <= 1;
@@ -230,6 +251,7 @@ export async function runHybridDecision<T>(
       ...(jevDecision.probabilities ? { probabilities: jevDecision.probabilities } : {}),
       ...(finalConfidence !== undefined ? { confidence: finalConfidence } : {}),
       usage: usage(jevDecision.usage),
+      ...(jevRecord.providerCalls ? { providerCalls: structuredClone(jevRecord.providerCalls) } : {}),
       metadata: { hybrid: metadata },
     };
   }
@@ -252,13 +274,17 @@ export async function runHybridDecision<T>(
   let gptDecision: AgentDecision | undefined;
   let gptError: string | undefined;
   let gptFailureMetadata: Record<string, unknown> | undefined;
+  let gptFailureProviderCalls: ProviderCallRecord[] | undefined;
   try {
     gptDecision = await calls.gpt(input, signal);
   } catch (error) {
     gptError = errorText(error);
     gptFailureMetadata = errorMetadata(error);
+    if (error && typeof error === "object" && "providerCall" in error) {
+      gptFailureProviderCalls = [structuredClone((error as ProviderRequestError).providerCall)];
+    }
   }
-  const gptRecord = providerRecord(gptDecision, performance.now() - gptStarted, gptError, gptFailureMetadata);
+  const gptRecord = providerRecord(gptDecision, performance.now() - gptStarted, gptError, gptFailureMetadata, gptFailureProviderCalls);
   emitTrace(trace, {
     threshold,
     jev: traceRecord(jevRecord, jevDecision),
@@ -297,6 +323,7 @@ export async function runHybridDecision<T>(
       ...(gptDecision.probabilities ? { probabilities: gptDecision.probabilities } : {}),
       ...(finalConfidence !== undefined ? { confidence: finalConfidence } : {}),
       usage: sumUsage(jevDecision?.usage, gptDecision.usage),
+      ...(jevRecord.providerCalls || gptRecord.providerCalls ? { providerCalls: [...(jevRecord.providerCalls ?? []), ...(gptRecord.providerCalls ?? [])] } : {}),
       metadata: { hybrid: metadata },
     };
   }
@@ -327,6 +354,7 @@ export async function runHybridDecision<T>(
       ...(jevDecision.probabilities ? { probabilities: jevDecision.probabilities } : {}),
       ...(finalConfidence !== undefined ? { confidence: finalConfidence } : {}),
       usage: sumUsage(jevDecision.usage, gptDecision?.usage),
+      ...(jevRecord.providerCalls || gptRecord.providerCalls ? { providerCalls: [...(jevRecord.providerCalls ?? []), ...(gptRecord.providerCalls ?? [])] } : {}),
       metadata: { hybrid: metadata },
     };
   }
@@ -347,9 +375,10 @@ export class HybridAgent implements MahjongAgent {
   readonly id: string;
   private readonly threshold: number;
   private readonly jev: JevAgent;
-  private readonly gpt: GptAgent;
+  private readonly gpt: MahjongAgent;
+  lastProviderCalls: ProviderCallRecord[] | undefined;
 
-  constructor(threshold = DEFAULT_HYBRID_THRESHOLD, jev?: JevAgent, gpt?: GptAgent) {
+  constructor(threshold = DEFAULT_HYBRID_THRESHOLD, jev?: JevAgent, gpt?: MahjongAgent) {
     this.threshold = validateHybridThreshold(threshold);
     this.id = `hybrid@${this.threshold}`;
     this.jev = jev ?? new JevAgent();
@@ -357,14 +386,23 @@ export class HybridAgent implements MahjongAgent {
   }
 
   async decide(sample: DecisionSample, signal?: AbortSignal): Promise<AgentDecision> {
-    return runHybridDecision(sample, sample.legalActions, this.threshold, {
-      jev: (input, providerSignal) => this.jev.decide(input, providerSignal),
-      gpt: (input, providerSignal) => this.gpt.decide(input, providerSignal),
-    }, signal);
+    this.lastProviderCalls = undefined;
+    try {
+      const result = await runHybridDecision(sample, sample.legalActions, this.threshold, {
+        jev: (input, providerSignal) => this.jev.decide(input, providerSignal),
+        gpt: (input, providerSignal) => this.gpt.decide(input, providerSignal),
+      }, signal);
+      this.lastProviderCalls = result.providerCalls?.map((call) => structuredClone(call));
+      return result;
+    } catch (error) {
+      const metadata = errorMetadata(error);
+      this.lastProviderCalls = providerCallsFromHybridMetadata(metadata);
+      throw error;
+    }
   }
 
   async close(): Promise<void> {
-    return;
+    await this.gpt.close?.();
   }
 }
 

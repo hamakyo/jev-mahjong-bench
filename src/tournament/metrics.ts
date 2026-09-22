@@ -5,6 +5,8 @@ import type {
   TournamentAgentSummary,
   TournamentGameResult,
 } from "../types.js";
+import type { ProviderCallRecord } from "../providers/types.js";
+import { costPerDecisionUsd, type PricingSnapshot } from "../providers/pricing.js";
 
 const Z95 = 1.96;
 const STUDENT_T_95 = [
@@ -92,7 +94,7 @@ function blockMeans(games: TournamentGameResult[], agentId: string, field: "scor
   return [...grouped.values()].map((values) => mean(values));
 }
 
-function summaryFor(agentId: string, games: TournamentGameResult[]): TournamentAgentSummary {
+function summaryFor(agentId: string, games: TournamentGameResult[], records: GameDecisionRecord[], pricing?: PricingSnapshot): TournamentAgentSummary {
   const players = games.flatMap((game) => game.players.filter((player) => player.agentId === agentId));
   const decisionCount = players.reduce((sum, player) => sum + player.decisions, 0);
   const hands = players.reduce((sum, player) => sum + player.handCount, 0);
@@ -164,8 +166,6 @@ function summaryFor(agentId: string, games: TournamentGameResult[]): TournamentA
     outputTokens,
     inputTokensPerGame: gameCount ? inputTokens / gameCount : 0,
     outputTokensPerGame: gameCount ? outputTokens / gameCount : 0,
-    inputTokensPerDecision: decisionCount ? inputTokens / decisionCount : 0,
-    outputTokensPerDecision: decisionCount ? outputTokens / decisionCount : 0,
     fallbackCount,
     errorCount,
     fallbackRate: decisionCount ? fallbackCount / decisionCount : 0,
@@ -179,6 +179,54 @@ function summaryFor(agentId: string, games: TournamentGameResult[]): TournamentA
     ...(riichiRateInterval ? { riichiRateInterval } : {}),
     ...(callRateInterval ? { callRateInterval } : {}),
   };
+  const providerCalls: ProviderCallRecord[] = records
+    .filter((record) => record.agentId === agentId)
+    .flatMap((record) => record.providerCalls ?? []);
+  if (providerCalls.length) {
+    const usageReported = providerCalls.filter((call) => call.usage !== undefined);
+    const sumField = (field: "inputTokens" | "outputTokens" | "totalTokens" | "cachedInputTokens" | "reasoningTokens"): number | undefined => {
+      const values = providerCalls.flatMap((call) => typeof call.usage?.[field] === "number" ? [call.usage[field]!] : []);
+      return values.length ? values.reduce((sum, value) => sum + value, 0) : undefined;
+    };
+    const input = sumField("inputTokens");
+    const output = sumField("outputTokens");
+    const total = sumField("totalTokens");
+    const cached = sumField("cachedInputTokens");
+    const reasoning = sumField("reasoningTokens");
+    result.modelDecisionCount = providerCalls.reduce((sum, call) => sum + call.logicalCallCount, 0);
+    result.usageReportedDecisionCount = usageReported.length;
+    result.latencyP50Ms = percentile(providerCalls.map((call) => call.latencyMs), 0.5);
+    result.latencyP95Ms = percentile(providerCalls.map((call) => call.latencyMs), 0.95);
+    if (decisionCount) result.canonicalInputBytesPerDecision = providerCalls.reduce((sum, call) => sum + call.canonicalInputBytes, 0) / decisionCount;
+    if (input !== undefined) {
+      result.inputTokens = input;
+      if (decisionCount) result.inputTokensPerDecision = input / decisionCount;
+    } else {
+      delete result.inputTokensPerDecision;
+    }
+    if (output !== undefined) {
+      result.outputTokens = output;
+      if (decisionCount) result.outputTokensPerDecision = output / decisionCount;
+    } else {
+      delete result.outputTokensPerDecision;
+    }
+    if (total !== undefined) {
+      result.totalTokens = total;
+      if (decisionCount) result.totalTokensPerDecision = total / decisionCount;
+    }
+    if (cached !== undefined) {
+      result.cachedInputTokens = cached;
+      if (decisionCount) result.cachedInputTokensPerDecision = cached / decisionCount;
+    }
+    if (reasoning !== undefined) {
+      result.reasoningTokens = reasoning;
+      if (decisionCount) result.reasoningTokensPerDecision = reasoning / decisionCount;
+    }
+    if (pricing) {
+      const cost = costPerDecisionUsd(providerCalls, pricing, decisionCount);
+      if (cost !== undefined) result.costPerDecisionUsd = cost;
+    }
+  }
   return result;
 }
 
@@ -196,9 +244,9 @@ function pairValues(games: TournamentGameResult[], leftAgentId: string, rightAge
   return [...grouped.values()].map((value) => mean(value.left) - mean(value.right));
 }
 
-export function aggregateTournament(games: TournamentGameResult[], _records: GameDecisionRecord[] = []): TournamentMetrics {
+export function aggregateTournament(games: TournamentGameResult[], records: GameDecisionRecord[] = [], pricing?: PricingSnapshot): TournamentMetrics {
   const agentIds = [...new Set(games.flatMap((game) => game.players.map((player) => player.agentId)))].sort();
-  const agents = agentIds.map((agentId) => summaryFor(agentId, games));
+  const agents = agentIds.map((agentId) => summaryFor(agentId, games, records, pricing));
   const pairwise: PairwiseComparison[] = [];
   for (let leftIndex = 0; leftIndex < agentIds.length; leftIndex += 1) {
     for (let rightIndex = leftIndex + 1; rightIndex < agentIds.length; rightIndex += 1) {
@@ -228,18 +276,19 @@ function estimateIntervalText(estimate: number, interval: ConfidenceInterval | u
 }
 
 function percent(value: number): string { return `${(value * 100).toFixed(1)}%`; }
+function metric(value: number | undefined, digits = 1): string { return value === undefined ? "—" : value.toFixed(digits); }
 
 export function renderTournamentMarkdown(metrics: TournamentMetrics): string {
   const rows = metrics.agents.map((agent) =>
-    `| ${agent.agentId} | ${agent.games} | ${estimateIntervalText(agent.meanScore, agent.scoreInterval)} | ${estimateIntervalText(agent.meanRank, agent.rankInterval)} | ${percent(agent.firstRate)} | ${percent(agent.fourthRate)} | ${percent(agent.winRate)} | ${percent(agent.dealInRate)} | ${percent(agent.riichiRate)} | ${percent(agent.callRate)} | ${agent.decisions} | ${agent.p50LatencyMs.toFixed(1)} / ${agent.p95LatencyMs.toFixed(1)} | ${agent.meanInputBytes.toFixed(0)} / ${agent.maxInputBytes} | ${percent(agent.escalationRate)} | ${percent(agent.fallbackRate)} | ${percent(agent.errorRate)} | ${agent.retryCount} | ${agent.jevInputTokens} / ${agent.jevOutputTokens} | ${agent.gptInputTokens} / ${agent.gptOutputTokens} | ${agent.inputTokens} / ${agent.outputTokens} |`);
+    `| ${agent.agentId} | ${agent.games} | ${estimateIntervalText(agent.meanScore, agent.scoreInterval)} | ${estimateIntervalText(agent.meanRank, agent.rankInterval)} | ${percent(agent.firstRate)} | ${percent(agent.fourthRate)} | ${percent(agent.winRate)} | ${percent(agent.dealInRate)} | ${percent(agent.riichiRate)} | ${percent(agent.callRate)} | ${agent.decisions} | ${agent.p50LatencyMs.toFixed(1)} / ${agent.p95LatencyMs.toFixed(1)} | ${agent.latencyP50Ms === undefined ? "—" : `${metric(agent.latencyP50Ms)} / ${metric(agent.latencyP95Ms)}`} | ${agent.meanInputBytes.toFixed(0)} / ${agent.maxInputBytes} | ${percent(agent.escalationRate)} | ${percent(agent.fallbackRate)} | ${percent(agent.errorRate)} | ${agent.retryCount} | ${metric(agent.modelDecisionCount, 0)} / ${metric(agent.usageReportedDecisionCount, 0)} | ${metric(agent.inputTokensPerDecision)} / ${metric(agent.outputTokensPerDecision)} / ${metric(agent.totalTokensPerDecision)} | ${metric(agent.cachedInputTokensPerDecision)} / ${metric(agent.reasoningTokensPerDecision)} | ${metric(agent.canonicalInputBytesPerDecision, 0)} | ${metric(agent.costPerDecisionUsd, 6)} |`);
   const pairRows = metrics.pairwise.map((pair) =>
     `| ${pair.leftAgentId} − ${pair.rightAgentId} | ${pair.pairs} | ${estimateIntervalText(pair.meanScoreDifference, pair.scoreDifferenceInterval)} | ${estimateIntervalText(pair.meanRankDifference, pair.rankDifferenceInterval)} |`);
   return `# Tournament report
 
 Score/rank columns show pair-block mean and 95% interval. Rates are Wilson 95% intervals in JSON.
 
-| Agent | Games | Score mean [95% CI] | Rank mean [95% CI] | 1st | 4th | Win | Deal-in | Riichi | Call | Decisions | p50 / p95 ms | Input bytes avg / max | Escalation | Fallback | Error | Retries | Jev in / out | GPT in / out | Total in / out |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Agent | Games | Score mean [95% CI] | Rank mean [95% CI] | 1st | 4th | Win | Deal-in | Riichi | Call | Decisions | Agent p50 / p95 ms | Provider p50 / p95 ms | Input bytes avg / max | Escalation | Fallback | Error | Retries | Calls / usage | In / out / total per decision | Cached / reasoning per decision | Canonical bytes/decision | Cost/decision |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 ${rows.join("\n")}
 
 ## Pairwise differences

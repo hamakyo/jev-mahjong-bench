@@ -1,3 +1,5 @@
+import type { NormalizedUsage, ProviderCallRecord } from "./providers/types.js";
+
 export type TileEncoding = "mpsz";
 
 export type DatasetPlatform = "tenhou" | "majsoul";
@@ -63,6 +65,8 @@ export interface AgentDecision {
   probabilities?: Record<string, number>;
   confidence?: number;
   usage?: TokenUsage;
+  normalizedUsage?: NormalizedUsage;
+  providerCalls?: ProviderCallRecord[];
   metadata?: Record<string, unknown>;
 }
 
@@ -78,6 +82,9 @@ export interface DecisionRecord {
   probabilities?: Record<string, number>;
   inputTokens?: number;
   outputTokens?: number;
+  normalizedUsage?: NormalizedUsage;
+  canonicalInputBytes?: number;
+  providerCalls?: ProviderCallRecord[];
   metadata?: Record<string, unknown>;
   error?: string;
 }
@@ -152,6 +159,7 @@ export interface GameDecisionRecord {
   stateBytes: number;
   recentEventCount: number;
   retryCount: number;
+  providerCalls?: ProviderCallRecord[];
   inputTokens?: number;
   outputTokens?: number;
   metadata?: Record<string, unknown>;
@@ -203,6 +211,7 @@ export interface SeatGameResult {
   gptRetryCount: number;
   inputTokens: number;
   outputTokens: number;
+  providerCalls?: ProviderCallRecord[];
   rawEventCounts: Record<string, number>;
 }
 
@@ -254,8 +263,20 @@ export interface TournamentAgentSummary {
   outputTokens: number;
   inputTokensPerGame: number;
   outputTokensPerGame: number;
-  inputTokensPerDecision: number;
-  outputTokensPerDecision: number;
+  inputTokensPerDecision?: number;
+  outputTokensPerDecision?: number;
+  modelDecisionCount?: number;
+  usageReportedDecisionCount?: number;
+  totalTokens?: number;
+  totalTokensPerDecision?: number;
+  cachedInputTokens?: number;
+  cachedInputTokensPerDecision?: number;
+  reasoningTokens?: number;
+  reasoningTokensPerDecision?: number;
+  canonicalInputBytesPerDecision?: number;
+  latencyP50Ms?: number;
+  latencyP95Ms?: number;
+  costPerDecisionUsd?: number;
   fallbackCount: number;
   errorCount: number;
   fallbackRate: number;
@@ -297,4 +318,19 @@ export interface AgentSummary {
   brierScore?: number;
   inputTokens: number;
   outputTokens: number;
+  providerDecisionCount?: number;
+  modelDecisionCount?: number;
+  usageReportedDecisionCount?: number;
+  totalTokens?: number;
+  inputTokensPerDecision?: number;
+  outputTokensPerDecision?: number;
+  totalTokensPerDecision?: number;
+  cachedInputTokens?: number;
+  cachedInputTokensPerDecision?: number;
+  reasoningTokens?: number;
+  reasoningTokensPerDecision?: number;
+  canonicalInputBytesPerDecision?: number;
+  latencyP50Ms?: number;
+  latencyP95Ms?: number;
+  costPerDecisionUsd?: number;
 }

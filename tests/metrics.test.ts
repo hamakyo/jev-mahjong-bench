@@ -23,4 +23,27 @@ describe("summarize", () => {
     expect(s.successRate).toBe(0);
     expect(s.exactMatchRate).toBe(0);
   });
+
+  it("uses decision count, not provider call count, for provider averages", () => {
+    const providerCall = {
+      providerId: "openai",
+      modelId: "demo",
+      model: "demo",
+      endpointFamily: "test",
+      canonicalInputBytes: 100,
+      latencyMs: 1,
+      logicalCallCount: 1 as const,
+      httpAttemptCount: 1,
+      retryCount: 0,
+      usage: { inputTokens: 100, outputTokens: 10 },
+    };
+    const records: DecisionRecord[] = [
+      { agentId: "hybrid", sampleId: "a", action: "x", isLegal: true, latencyMs: 1, providerCalls: [providerCall] },
+      { agentId: "hybrid", sampleId: "b", action: "x", isLegal: true, latencyMs: 1 },
+    ];
+    const summary = summarize("hybrid", records);
+    expect(summary.inputTokensPerDecision).toBe(50);
+    expect(summary.outputTokensPerDecision).toBe(5);
+    expect(summary.canonicalInputBytesPerDecision).toBe(50);
+  });
 });

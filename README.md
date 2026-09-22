@@ -147,6 +147,9 @@ should not be redistributed without checking those terms.
 --concurrency <n>     concurrent decisions per agent (default: 1)
 --seed <n>            deterministic random seed (default: 42)
 --hybrid-threshold <n> Jev confidence threshold for hybrid (default: 0.75)
+--hybrid-fallback <id> registered model used by hybrid escalation (default: gpt)
+--models <path>       YAML model registry for pluggable providers
+--pricing <path>      pinned YAML pricing snapshot
 --paired-runs <n>     paired tournament seed blocks (exclusive with --games)
 --port <n>            watch server port; 0 selects an ephemeral port
 --exit-on-complete <bool> watch-only flag for CI smoke tests
@@ -489,6 +492,32 @@ RiichiEnvBridge -> TournamentObserver -> public projector -> Snapshot/SSE -> bro
 - Tenhou XML or Mahjong Soul protobuf acquisition/conversion
 - three-player mahjong, distributed execution, training, and online play
 - Mortal weights, AGPL code, credentials, or automatic model downloads
+
+## Pluggable providers and model registry
+
+Generic LLM seats use the same bounded `GameDecisionInput` and must return one
+legal action ID. Copy `models.example.yaml` to a local file, set only the
+referenced environment variables, and run any registered model without adding
+an agent class:
+
+```bash
+pnpm tournament -- \
+  --seats jev,openai-luna,claude-sonnet,deepseek \
+  --models models.yaml --games 10 --out results/llm-arena
+
+pnpm bench -- \
+  --agents openai-luna,claude-sonnet --models models.yaml \
+  --pricing pricing.yaml --dataset datasets/evaluation.jsonl \
+  --out results/providers
+```
+
+Supported providers are OpenAI Responses, Anthropic Messages, and generic
+OpenAI-compatible Chat Completions (`requestMode: json|tool`). Registry hashes,
+prompt/schema versions, canonical input bytes, request IDs, retry counts, and
+normalized usage are saved in artifacts. API key values and custom header
+values are never serialized; headers must reference an environment variable.
+`gpt`, `jev`, `mortal`, `random`, and `hybrid` remain backwards-compatible.
+Use `--hybrid-fallback <model-id>` to inject a registered fallback model.
 
 ## References
 

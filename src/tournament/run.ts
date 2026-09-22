@@ -9,6 +9,7 @@ import type {
   SeatGameResult,
   TournamentGameResult,
 } from "../types.js";
+import type { ProviderCallRecord } from "../providers/types.js";
 import { canonicalJson } from "../mjai/tiles.js";
 import { createGameAgent, type GameAgentWithMetadata } from "../agents/game.js";
 import { DEFAULT_HYBRID_THRESHOLD, parseHybridAgentSpec } from "../agents/hybrid.js";
@@ -20,6 +21,9 @@ import { inspectGameDecisionInput, LlmInputContractError, type GameInputDiagnost
 import type { LiveDecisionDiagnostics, TournamentEvent } from "../live/events.js";
 import type { TournamentControl } from "../live/control.js";
 import { ReplayRecorder } from "../replay/recorder.js";
+import { createModelRegistry, type ModelRegistry } from "../providers/registry.js";
+import type { PricingSnapshot } from "../providers/pricing.js";
+import { ACTION_SCHEMA_VERSION, PROMPT_VERSION, USAGE_MAPPING_VERSION } from "../providers/prompt.js";
 
 export interface TournamentOptions {
   seats: string[];
@@ -32,6 +36,9 @@ export interface TournamentOptions {
   out: string;
   timeoutMs: number;
   hybridThreshold?: number;
+  hybridFallbackModel?: string;
+  modelRegistry?: ModelRegistry;
+  pricing?: PricingSnapshot;
   mortalConfig?: MortalConfig;
 }
 
@@ -63,7 +70,7 @@ function fileToken(value: string): string {
 }
 
 function effectiveHybridThreshold(options: TournamentOptions): number | undefined {
-  return options.hybridThreshold ?? (options.seats.some((seat) => seat.trim() === "hybrid") ? DEFAULT_HYBRID_THRESHOLD : undefined);
+  return options.hybridThreshold ?? (options.seats.some((seat) => seat.trim() === "hybrid" || seat.trim().startsWith("hybrid@")) ? DEFAULT_HYBRID_THRESHOLD : undefined);
 }
 
 interface HybridTournamentAgentMetadata {
@@ -76,6 +83,9 @@ interface HybridTournamentAgentMetadata {
 
 function hybridTournamentAgents(options: TournamentOptions): HybridTournamentAgentMetadata[] {
   const fallback = effectiveHybridThreshold(options) ?? DEFAULT_HYBRID_THRESHOLD;
+  const registry = options.modelRegistry ?? createModelRegistry();
+  const fallbackModelId = options.hybridFallbackModel ?? "gpt";
+  const fallbackModel = registry.resolve(fallbackModelId);
   return options.seats.flatMap((requestedAgent, seat) => {
     const spec = parseHybridAgentSpec(requestedAgent.trim());
     if (!spec) return [];
@@ -87,8 +97,10 @@ function hybridTournamentAgents(options: TournamentOptions): HybridTournamentAge
       threshold,
       jevModel: process.env.TYPESAFE_MODEL ?? "system-one",
       jevReasoningEffort: process.env.TYPESAFE_REASONING_EFFORT ?? "default",
-      gptModel: process.env.OPENAI_MODEL ?? "gpt-5.6-luna",
-      gptReasoningEffort: process.env.OPENAI_REASONING_EFFORT ?? "none",
+      gptModel: fallbackModel.model,
+      gptReasoningEffort: fallbackModel.reasoningEffort ?? "none",
+      fallbackModelId,
+      fallbackModelFingerprint: fallbackModel.fingerprint,
     };
     return [{ seat, requestedAgent, agentId, threshold, settingsSha256: sha256(canonicalJson(settings)) }];
   });
@@ -109,6 +121,17 @@ function gameId(
   pairId: string,
   rotationIndex: number,
 ): string {
+  const registry = options.modelRegistry ?? createModelRegistry();
+  const hybridFallbackModel = seats.some((seat) => seat === "hybrid" || seat.startsWith("hybrid@"))
+    ? options.hybridFallbackModel ?? "gpt"
+    : null;
+  const registryModels = [...new Set([
+    ...seats.filter((seat) => registry.has(seat)),
+    ...(hybridFallbackModel ? [hybridFallbackModel] : []),
+  ])].sort().map((id) => {
+    const model = registry.resolve(id);
+    return { id, fingerprint: model.fingerprint };
+  });
   const digest = sha256(canonicalJson({
     mode: options.mode,
     rule: options.rule,
@@ -119,6 +142,9 @@ function gameId(
     rotationIndex,
     seats,
     hybridThreshold: effectiveHybridThreshold(options) ?? null,
+    registryHash: registry.hash,
+    registryModels,
+    hybridFallbackModel,
   }));
   return `seed-${seed}-base-${baseSeed}-pair-${fileToken(pairId)}-rotation-${rotationIndex}-seats-${seats.map(fileToken).join("_")}-${digest}`;
 }
@@ -177,6 +203,7 @@ export interface AgentCallResult {
   action: string;
   metadata: Record<string, unknown> | undefined;
   usage: { inputTokens?: number; outputTokens?: number } | undefined;
+  providerCalls?: ProviderCallRecord[];
   diagnostics?: LiveDecisionDiagnostics | undefined;
 }
 
@@ -208,6 +235,7 @@ export function serializedAgentAct(
     controller = new AbortController();
     agent.lastMetadata = undefined;
     agent.lastUsage = undefined;
+    agent.lastProviderCalls = undefined;
     agent.lastDiagnostics = undefined;
     return agent.act(observation, controller.signal).then((action) => {
       if (cancelled || controller?.signal.aborted) throw abortedError();
@@ -215,6 +243,7 @@ export function serializedAgentAct(
         action,
         metadata: agent.lastMetadata,
         usage: agent.lastUsage,
+        ...(agent.lastProviderCalls ? { providerCalls: structuredClone(agent.lastProviderCalls) } : {}),
         ...(agent.lastDiagnostics ? { diagnostics: structuredClone(agent.lastDiagnostics) } : {}),
       };
     });
@@ -365,6 +394,7 @@ async function decide(
   let requestedActionId: string | undefined;
   let callMetadata: Record<string, unknown> | undefined;
   let callUsage: { inputTokens?: number; outputTokens?: number } | undefined;
+  let callProviderCalls: ProviderCallRecord[] | undefined;
   let callDiagnostics: LiveDecisionDiagnostics | undefined;
   let error: string | undefined;
   let fallbackReason: string | undefined;
@@ -387,6 +417,7 @@ async function decide(
     requestedActionId = result.action;
     callMetadata = result.metadata;
     callUsage = result.usage;
+    callProviderCalls = result.providerCalls;
     callDiagnostics = result.diagnostics;
   } catch (reason) {
     if (reason instanceof Error && reason.name === "TimeoutError" && call) {
@@ -398,6 +429,7 @@ async function decide(
       : error.includes("timeout") ? "timeout" : "agent-error";
     callMetadata = agent.lastMetadata;
     callUsage = agent.lastUsage;
+    callProviderCalls = agent.lastProviderCalls ? structuredClone(agent.lastProviderCalls) : undefined;
     callDiagnostics = agent.lastDiagnostics;
   }
   const requested = requestedActionId ? observation.legalActions.find((action) => action.id === requestedActionId) : undefined;
@@ -420,6 +452,7 @@ async function decide(
     stateBytes: inputDiagnostics.stateBytes,
     recentEventCount: inputDiagnostics.recentEventCount,
     retryCount: retryCountFromMetadata(callMetadata),
+    ...(callProviderCalls?.length ? { providerCalls: callProviderCalls } : {}),
     ...(callUsage && typeof callUsage.inputTokens === "number" ? { inputTokens: callUsage.inputTokens } : {}),
     ...(callUsage && typeof callUsage.outputTokens === "number" ? { outputTokens: callUsage.outputTokens } : {}),
     ...(callMetadata ? { metadata: callMetadata } : {}),
@@ -479,6 +512,9 @@ function playerResult(
     }, 0),
     inputTokens: ownRecords.reduce((sum, record) => sum + (record.inputTokens ?? 0), 0),
     outputTokens: ownRecords.reduce((sum, record) => sum + (record.outputTokens ?? 0), 0),
+    ...(ownRecords.some((record) => record.providerCalls?.length)
+      ? { providerCalls: ownRecords.flatMap((record) => record.providerCalls ?? []).map((call) => structuredClone(call)) }
+      : {}),
     rawEventCounts: outcome.rawEventCounts,
   };
 }
@@ -501,6 +537,8 @@ async function runGame(
       agents.push(createGameAgent(name, game.seed + seat, {
         ...(options.mortalConfig ? { mortalConfig: options.mortalConfig } : {}),
         ...(options.hybridThreshold !== undefined ? { hybridThreshold: options.hybridThreshold } : {}),
+        ...(options.hybridFallbackModel ? { hybridFallbackModel: options.hybridFallbackModel } : {}),
+        ...(options.modelRegistry ? { modelRegistry: options.modelRegistry } : {}),
       }));
     }
     await control?.enter("game-start");
@@ -681,7 +719,20 @@ function validateOptions(options: TournamentOptions): void {
 function modelMetadata(options: TournamentOptions, mortalPolicy: Record<string, unknown> | undefined): Record<string, unknown> {
   const hybridThreshold = effectiveHybridThreshold(options);
   const hybridAgents = hybridTournamentAgents(options);
+  const registry = options.modelRegistry ?? createModelRegistry();
+  const modelIds = [...new Set([
+    ...options.seats.filter((seat) => registry.has(seat)),
+    ...(options.seats.some((seat) => seat === "hybrid" || seat.startsWith("hybrid@")) ? [options.hybridFallbackModel ?? "gpt"] : []),
+  ])];
   return {
+    registryHash: registry.hash,
+    promptVersion: PROMPT_VERSION,
+    actionSchemaVersion: ACTION_SCHEMA_VERSION,
+    usageMappingVersion: USAGE_MAPPING_VERSION,
+    registryModels: registry.definitionsFor(modelIds),
+    hybridFallbackModel: options.hybridFallbackModel ?? "gpt",
+    providerIds: modelIds.map((id) => registry.resolve(id).provider),
+    selectedModelIds: modelIds,
     jev: {
       provider: "typesafe",
       model: process.env.TYPESAFE_MODEL ?? "system-one",
@@ -698,9 +749,18 @@ function modelMetadata(options: TournamentOptions, mortalPolicy: Record<string, 
 }
 
 export async function runTournament(options: TournamentOptions, runtime: TournamentRuntime = {}): Promise<void> {
-  validateOptions(options);
-  const schedule = buildTournamentSchedule(options);
-  const output = resolve(options.out);
+  const modelRegistry = options.modelRegistry ?? createModelRegistry();
+  const effectiveOptions: TournamentOptions = { ...options, modelRegistry };
+  validateOptions(effectiveOptions);
+  const selectedIds = [
+    ...effectiveOptions.seats,
+    ...(effectiveOptions.seats.some((seat) => seat === "hybrid" || seat.startsWith("hybrid@"))
+      ? [effectiveOptions.hybridFallbackModel ?? "gpt"] : []),
+  ];
+  // Resolve IDs and credentials before constructing RiichiEnvBridge in runGame.
+  modelRegistry.validateSelected(selectedIds);
+  const schedule = buildTournamentSchedule(effectiveOptions);
+  const output = resolve(effectiveOptions.out);
   const replay = new ReplayRecorder(output);
   const observer: TournamentObserver = {
     emit: (event) => {
@@ -714,13 +774,14 @@ export async function runTournament(options: TournamentOptions, runtime: Tournam
     type: "tournament:start",
     totalGames,
     settings: {
-      mode: options.mode,
-      rule: options.rule,
-      seed: options.seed,
-      seatPolicy: options.pairedRuns !== undefined ? "rotate" : options.seatPolicy,
-      requestedSeats: [...options.seats],
-      timeoutMs: options.timeoutMs,
-      pairedRuns: options.pairedRuns ?? null,
+      mode: effectiveOptions.mode,
+      rule: effectiveOptions.rule,
+      seed: effectiveOptions.seed,
+      seatPolicy: effectiveOptions.pairedRuns !== undefined ? "rotate" : effectiveOptions.seatPolicy,
+      requestedSeats: [...effectiveOptions.seats],
+      timeoutMs: effectiveOptions.timeoutMs,
+      pairedRuns: effectiveOptions.pairedRuns ?? null,
+      registryHash: modelRegistry.hash,
     },
     schedule: schedule.map(({ index, gameId, seed, baseSeed, pairId, rotationIndex, seats }) => ({
       index,
@@ -738,7 +799,7 @@ export async function runTournament(options: TournamentOptions, runtime: Tournam
     const allResults: TournamentGameResult[] = [];
     const allRecords: GameDecisionRecord[] = [];
     for (const game of schedule) {
-      const finished = await runGame(options, game, observer, totalGames, runtime.control);
+      const finished = await runGame(effectiveOptions, game, observer, totalGames, runtime.control);
       allResults.push(finished.result);
       allRecords.push(...finished.records);
       const eventLines = finished.events.map((event) => JSON.stringify(event)).join("\n") + "\n";
@@ -757,26 +818,33 @@ export async function runTournament(options: TournamentOptions, runtime: Tournam
     }
 
     await runtime.control?.enter("tournament-end");
-    const metrics: TournamentMetrics = aggregateTournament(allResults, allRecords);
-    const mortalPolicy = options.mortalConfig
-      ? await mortalReferencePolicy(options.mortalConfig) as unknown as Record<string, unknown>
+    const metrics: TournamentMetrics = aggregateTournament(allResults, allRecords, effectiveOptions.pricing);
+    const mortalPolicy = effectiveOptions.mortalConfig
+      ? await mortalReferencePolicy(effectiveOptions.mortalConfig) as unknown as Record<string, unknown>
       : undefined;
-    const hybridThreshold = effectiveHybridThreshold(options);
+    const hybridThreshold = effectiveHybridThreshold(effectiveOptions);
     const settings = {
-      schedule: options.pairedRuns !== undefined ? "paired" : "games",
+      schedule: effectiveOptions.pairedRuns !== undefined ? "paired" : "games",
       games: schedule.length,
-      pairedRuns: options.pairedRuns ?? null,
-      mode: options.mode,
-      rule: options.rule,
-      seed: options.seed,
-      seatPolicy: options.pairedRuns !== undefined ? "rotate" : options.seatPolicy,
-      timeoutMs: options.timeoutMs,
-      requestedSeats: options.seats,
+      pairedRuns: effectiveOptions.pairedRuns ?? null,
+      mode: effectiveOptions.mode,
+      rule: effectiveOptions.rule,
+      seed: effectiveOptions.seed,
+      seatPolicy: effectiveOptions.pairedRuns !== undefined ? "rotate" : effectiveOptions.seatPolicy,
+      timeoutMs: effectiveOptions.timeoutMs,
+      requestedSeats: effectiveOptions.seats,
+      registryHash: modelRegistry.hash,
+      pricingSnapshot: effectiveOptions.pricing ? {
+        snapshotId: effectiveOptions.pricing.snapshotId,
+        asOf: effectiveOptions.pricing.asOf,
+        currency: effectiveOptions.pricing.currency,
+        sha256: effectiveOptions.pricing.sha256,
+      } : null,
       ...(hybridThreshold !== undefined ? { hybridThreshold } : {}),
       ...(hybridTournamentAgents(options).length ? { hybridAgents: hybridTournamentAgents(options) } : {}),
     };
     const dependencies = { riichienv: "0.4.10", node: process.version };
-    const models = modelMetadata(options, mortalPolicy);
+    const models = modelMetadata(effectiveOptions, mortalPolicy);
     const seedSchedule = schedule.map(({ index, gameId: id, seed, baseSeed, pairId, rotationIndex, seats }) => ({
       index,
       gameId: id,
@@ -786,10 +854,16 @@ export async function runTournament(options: TournamentOptions, runtime: Tournam
       rotationIndex,
       seats,
     }));
-    const benchmarkConfig = { settings, dependencies, models, seedSchedule };
+    const benchmarkConfig = {
+      settings,
+      dependencies,
+      models,
+      seedSchedule,
+      pricingSnapshot: effectiveOptions.pricing ?? null,
+    };
     const configSha256 = sha256(canonicalJson(benchmarkConfig));
     const summary = {
-      version: 2,
+      version: 3,
       ...benchmarkConfig,
       configSha256,
       games: allResults,

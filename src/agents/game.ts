@@ -1,6 +1,6 @@
 import { createInterface } from "node:readline";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import type { GameAction, GameAgent, GameDecisionInput, GameObservation } from "../types.js";
+import type { AgentDecision, GameAction, GameAgent, GameDecisionInput, GameObservation } from "../types.js";
 import type { LiveDecisionDiagnostics } from "../live/events.js";
 import { canonicalJson, mjaiToMpsz } from "../mjai/tiles.js";
 import { inspectGameDecisionInput } from "../game/input.js";
@@ -14,10 +14,15 @@ import {
 } from "./hybrid.js";
 import { JevAgent } from "./jev.js";
 import { eventNeedsResponse, responseActor, type MortalConfig, mortalReferencePolicy } from "./mortal.js";
+import { GenericLlmGameAgent } from "./llm.js";
+import { createProvider } from "../providers/index.js";
+import { createModelRegistry, type ModelRegistry } from "../providers/registry.js";
+import type { ProviderCallRecord } from "../providers/types.js";
 
 export interface GameAgentWithMetadata extends GameAgent {
   lastMetadata: Record<string, unknown> | undefined;
   lastUsage: { inputTokens?: number; outputTokens?: number } | undefined;
+  lastProviderCalls?: ProviderCallRecord[] | undefined;
   /** Live-only diagnostics; never copied into GameDecisionRecord automatically. */
   lastDiagnostics?: LiveDecisionDiagnostics | undefined;
 }
@@ -25,6 +30,8 @@ export interface GameAgentWithMetadata extends GameAgent {
 export interface GameAgentFactoryOptions {
   mortalConfig?: MortalConfig;
   hybridThreshold?: number;
+  hybridFallbackModel?: string;
+  modelRegistry?: ModelRegistry;
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -83,6 +90,18 @@ function hybridDiagnostics(metadata: Record<string, unknown> | undefined, decisi
     providerMetadata: { hybrid: structuredClone(hybrid) },
     hybridTrace: trace,
   };
+}
+
+function providerCallsFromHybridMetadata(metadata: Record<string, unknown> | undefined): ProviderCallRecord[] | undefined {
+  const hybrid = objectValue(metadata?.hybrid);
+  if (!hybrid) return undefined;
+  const calls: ProviderCallRecord[] = [];
+  for (const provider of ["jev", "gpt"] as const) {
+    const record = objectValue(hybrid[provider]);
+    const providerCalls = record?.providerCalls;
+    if (Array.isArray(providerCalls)) calls.push(...structuredClone(providerCalls) as ProviderCallRecord[]);
+  }
+  return calls.length ? calls : undefined;
 }
 
 function diagnosticsForHybridTrace(trace: HybridTrace): LiveDecisionDiagnostics {
@@ -215,15 +234,17 @@ export class HybridGameAgent implements GameAgentWithMetadata {
   readonly id: string;
   private readonly threshold: number;
   private readonly jev = new JevAgent();
-  private readonly gpt = new GptAgent();
+  private readonly gpt: { decideGame(input: GameDecisionInput, signal?: AbortSignal): Promise<AgentDecision>; cancel?(): void; close?(): Promise<void>; lastProviderCalls?: ProviderCallRecord[] | undefined };
   private readonly controllers = new Set<AbortController>();
   private generation = 0;
   lastMetadata: Record<string, unknown> | undefined;
   lastUsage: { inputTokens?: number; outputTokens?: number } | undefined;
+  lastProviderCalls: ProviderCallRecord[] | undefined;
   lastDiagnostics: LiveDecisionDiagnostics | undefined;
 
-  constructor(threshold = DEFAULT_HYBRID_THRESHOLD) {
+  constructor(threshold = DEFAULT_HYBRID_THRESHOLD, fallback: { decideGame(input: GameDecisionInput, signal?: AbortSignal): Promise<AgentDecision>; cancel?(): void; close?(): Promise<void>; lastProviderCalls?: ProviderCallRecord[] | undefined } = new GptAgent()) {
     this.threshold = validateHybridThreshold(threshold);
+    this.gpt = fallback;
     this.id = `hybrid@${this.threshold}`;
   }
 
@@ -253,6 +274,7 @@ export class HybridGameAgent implements GameAgentWithMetadata {
       }
       this.lastMetadata = decision.metadata;
       this.lastUsage = decision.usage;
+      this.lastProviderCalls = decision.providerCalls?.map((call) => structuredClone(call));
       const metadataDiagnostics = hybridDiagnostics(decision.metadata, decision);
       this.lastDiagnostics = metadataDiagnostics && traceDiagnostics
         ? {
@@ -264,6 +286,8 @@ export class HybridGameAgent implements GameAgentWithMetadata {
       return decision.action;
     } catch (error) {
       this.lastMetadata = metadataFromError(error);
+      this.lastProviderCalls = providerCallsFromHybridMetadata(this.lastMetadata)
+        ?? this.gpt.lastProviderCalls?.map((call) => structuredClone(call));
       const metadataDiagnostics = hybridDiagnostics(this.lastMetadata);
       if (metadataDiagnostics) {
         this.lastDiagnostics = this.lastDiagnostics
@@ -286,7 +310,7 @@ export class HybridGameAgent implements GameAgentWithMetadata {
     for (const controller of this.controllers) controller.abort();
   }
 
-  async close(): Promise<void> { this.cancel(); }
+  async close(): Promise<void> { this.cancel(); await this.gpt.close?.(); }
 }
 
 interface MortalGameProcess {
@@ -532,13 +556,21 @@ export class MortalGameAgent implements GameAgentWithMetadata {
 export function createGameAgent(name: string, seed: number, options: GameAgentFactoryOptions = {}): GameAgentWithMetadata {
   const normalized = name.trim();
   const hybrid = parseHybridAgentSpec(normalized);
-  if (hybrid) return new HybridGameAgent(hybrid.threshold ?? options.hybridThreshold ?? DEFAULT_HYBRID_THRESHOLD);
+  const registry = options.modelRegistry ?? createModelRegistry();
+  if (hybrid) {
+    const fallbackModel = registry.resolve(options.hybridFallbackModel ?? "gpt");
+    const fallback = new GenericLlmGameAgent(createProvider(fallbackModel), fallbackModel);
+    return new HybridGameAgent(hybrid.threshold ?? options.hybridThreshold ?? DEFAULT_HYBRID_THRESHOLD, fallback);
+  }
   if (normalized === "random") return new RandomGameAgent(seed);
   if (normalized === "jev") return new JevGameAgent();
-  if (normalized === "gpt") return new GptGameAgent();
   if (normalized === "mortal") {
     if (!options.mortalConfig) throw new Error("Mortal game agent requires --mortal-config");
     return new MortalGameAgent(options.mortalConfig);
   }
-  throw new Error(`Unknown game agent "${name}". Expected: jev, gpt, hybrid, mortal, random`);
+  if (normalized === "gpt" || registry.has(normalized)) {
+    const model = registry.resolve(normalized);
+    return new GenericLlmGameAgent(createProvider(model), model, normalized === "gpt" ? `gpt:${model.model}` : undefined);
+  }
+  throw new Error(`Unknown game agent "${name}". Expected: jev, gpt, hybrid, mortal, random, or a registered model ID`);
 }

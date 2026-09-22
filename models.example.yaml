@@ -1,0 +1,32 @@
+# Copy this file to models.yaml and set the referenced environment variables.
+# Secret values are intentionally never stored in this file or benchmark output.
+models:
+  openai-luna:
+    provider: openai
+    model: gpt-5.6-luna
+    reasoningEffort: none
+    apiKeyEnv: OPENAI_API_KEY
+
+  claude-sonnet:
+    provider: anthropic
+    model: claude-sonnet-4-20250514
+    apiKeyEnv: ANTHROPIC_API_KEY
+
+  deepseek:
+    provider: openai-compatible
+    baseUrl: https://api.deepseek.com/v1
+    model: deepseek-chat
+    apiKeyEnv: DEEPSEEK_API_KEY
+    requestMode: json
+
+  # Custom headers can only refer to environment variables.
+  compatible-tool:
+    provider: openai-compatible
+    baseUrl: https://example.invalid/v1
+    model: example-model
+    apiKeyEnv: EXAMPLE_API_KEY
+    requestMode: tool
+    headers:
+      X-Provider-Project:
+        env: EXAMPLE_PROJECT
+

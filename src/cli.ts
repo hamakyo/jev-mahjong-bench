@@ -31,6 +31,9 @@ import { loadReplay } from "./replay/loader.js";
 import { ReplayTimeline } from "./replay/timeline.js";
 import { exportReplayVideo } from "./export/video.js";
 import { DEFAULT_LOCALE, isLocale } from "./live/dashboard/i18n.js";
+import { loadModelRegistry } from "./providers/registry.js";
+import { loadPricingSnapshot } from "./providers/pricing.js";
+import { ACTION_SCHEMA_VERSION, PROMPT_VERSION, USAGE_MAPPING_VERSION } from "./providers/prompt.js";
 import type { DecisionRecord } from "./types.js";
 
 interface Flags { [key: string]: string; }
@@ -70,6 +73,8 @@ async function runBench(argv: string[]): Promise<void> {
   const seed = integer(flags, "seed", 42);
   const datasetPath = resolve(flags.dataset ?? "datasets/sample.jsonl");
   const samples = await loadDataset(datasetPath);
+  const modelRegistry = await loadModelRegistry(flags.models ? resolve(flags.models) : undefined);
+  const pricing = flags.pricing ? await loadPricingSnapshot(resolve(flags.pricing)) : undefined;
   const mortalConfig = flags["mortal-config"] ? await loadMortalConfig(resolve(flags["mortal-config"]!)) : undefined;
   const effectiveConcurrency = agentNames.includes("mortal") ? 1 : concurrency;
   const hybridThreshold = flags["hybrid-threshold"] === undefined
@@ -78,8 +83,15 @@ async function runBench(argv: string[]): Promise<void> {
   if (!Number.isFinite(hybridThreshold) || hybridThreshold < 0 || hybridThreshold > 1) {
     throw new Error("--hybrid-threshold must be a finite number between 0 and 1");
   }
+  const hybridFallbackModel = flags["hybrid-fallback"] ?? "gpt";
+  modelRegistry.validateSelected([
+    ...agentNames,
+    ...(agentNames.some((agent) => agent === "hybrid" || agent.startsWith("hybrid@")) ? [hybridFallbackModel] : []),
+  ]);
   const agents = createAgents(agentNames, seed, {
     hybridThreshold,
+    hybridFallbackModel,
+    modelRegistry,
     ...(mortalConfig ? { mortalConfig } : {}),
   });
   const records: DecisionRecord[] = [];
@@ -89,7 +101,7 @@ async function runBench(argv: string[]): Promise<void> {
       console.log(`Running ${agent.id} on ${samples.length} states (concurrency=${effectiveConcurrency})...`);
       const rows = await runAgent(agent, samples, effectiveConcurrency);
       records.push(...rows);
-      summaries.push(summarize(agent.id, rows));
+      summaries.push(summarize(agent.id, rows, pricing));
     }
     const refs = samples.filter((sample) => sample.referenceAction !== undefined);
     const mortalOnly = refs.length > 0 && refs.every((sample) => sample.referenceMetadata?.name.toLowerCase().startsWith("mortal"));
@@ -114,6 +126,14 @@ async function runBench(argv: string[]): Promise<void> {
       referencePolicies,
       openaiModel: process.env.OPENAI_MODEL ?? "gpt-5.6-luna",
       openaiReasoningEffort: process.env.OPENAI_REASONING_EFFORT ?? "none",
+      modelsFile: flags.models ?? null,
+      registryHash: modelRegistry.hash,
+      promptVersion: PROMPT_VERSION,
+      actionSchemaVersion: ACTION_SCHEMA_VERSION,
+      usageMappingVersion: USAGE_MAPPING_VERSION,
+      registryModels: modelRegistry.definitionsFor([...agentNames, hybridFallbackModel]),
+      hybridFallbackModel,
+      ...(pricing ? { pricingSnapshot: pricing } : {}),
     }, referenceLabel, referencePolicies);
     console.log(`Wrote ${out}/report.json and report.md`);
     for (const summary of summaries) {
@@ -275,11 +295,13 @@ async function runTournamentCommand(argv: string[]): Promise<void> {
 async function tournamentOptionsFromFlags(flags: Flags): Promise<TournamentOptions> {
   const seats = required(flags, "seats").split(",").map((value) => value.trim()).filter(Boolean);
   const mortalConfig = flags["mortal-config"] ? await loadMortalConfig(resolve(flags["mortal-config"]!)) : undefined;
+  const modelRegistry = await loadModelRegistry(flags.models ? resolve(flags.models) : undefined);
+  const pricing = flags.pricing ? await loadPricingSnapshot(resolve(flags.pricing)) : undefined;
   const hasGames = flags.games !== undefined;
   const hasPairedRuns = flags["paired-runs"] !== undefined;
   if (hasGames && hasPairedRuns) throw new Error("--games and --paired-runs are mutually exclusive");
   const hybridThreshold = flags["hybrid-threshold"] === undefined
-    ? (seats.some((seat) => seat === "hybrid") ? DEFAULT_HYBRID_THRESHOLD : undefined)
+    ? (seats.some((seat) => seat === "hybrid" || seat.startsWith("hybrid@")) ? DEFAULT_HYBRID_THRESHOLD : undefined)
     : Number.parseFloat(flags["hybrid-threshold"]!);
   if (hybridThreshold !== undefined && (!Number.isFinite(hybridThreshold) || hybridThreshold < 0 || hybridThreshold > 1)) {
     throw new Error("--hybrid-threshold must be a finite number between 0 and 1");
@@ -293,6 +315,9 @@ async function tournamentOptionsFromFlags(flags: Flags): Promise<TournamentOptio
     seatPolicy: (flags["seat-policy"] ?? "rotate") as "rotate" | "fixed",
     out: required(flags, "out"),
     timeoutMs: integer(flags, "timeout-ms", 60_000),
+    modelRegistry,
+    ...(pricing ? { pricing } : {}),
+    ...(flags["hybrid-fallback"] ? { hybridFallbackModel: flags["hybrid-fallback"] } : {}),
     ...(hybridThreshold !== undefined ? { hybridThreshold } : {}),
     ...(mortalConfig ? { mortalConfig } : {}),
   };

@@ -353,6 +353,33 @@ RiichiEnvBridge -> TournamentObserver -> 公開projector -> Snapshot/SSE -> ブ�
                                       \-> debug projector -> ローカル診断画面
 ```
 
+## pluggable providerとmodel registry
+
+汎用LLMのseatは、同じ16KiB制限付き`GameDecisionInput`を受け取り、合法なaction IDを
+1つだけ返します。`models.example.yaml`をコピーして`models.yaml`を作り、記載された
+環境変数だけを設定すれば、modelごとのGameAgentを追加せずに対局できます。
+
+```bash
+pnpm tournament -- \
+  --seats jev,openai-luna,claude-sonnet,deepseek \
+  --models models.yaml --games 10 --out results/llm-arena
+
+pnpm bench -- \
+  --agents openai-luna,claude-sonnet --models models.yaml \
+  --pricing pricing.yaml --dataset datasets/evaluation.jsonl \
+  --out results/providers
+```
+
+OpenAI Responses、Anthropic Messages、OpenAI互換Chat Completions
+（`requestMode: json|tool`）に対応します。成果物にはregistry hash、prompt/schema version、
+canonical input bytes、request ID、retry回数、共通usageを保存します。API keyやcustom
+headerの実値は保存せず、headerも環境変数参照だけを許可します。既存の`gpt`、`jev`、
+`mortal`、`random`、`hybrid`は互換維持されます。Hybridのfallbackは
+`--hybrid-fallback <model-id>`で差し替えられます。
+
+CLIでは`--models <path>`でモデルregistry、`--pricing <path>`で固定した価格snapshotを
+指定できます。価格が不足しているモデルのcostは推測せず`undefined`として出力します。
+
 ## ライセンス
 
 MIT
