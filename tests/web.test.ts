@@ -37,6 +37,9 @@ describe("Web UI run orchestration", () => {
     expect(webDashboardJs).toContain('"dashboard.title":"実行一覧"');
     expect(webDashboardCss).not.toMatch(/gradient|(?:box|text)-shadow|drop-shadow/i);
     expect(webDashboardCss).toContain("[hidden] { display:none !important; }");
+    expect(webDashboardHtml).toContain('id="run-search"');
+    expect(webDashboardHtml).toContain('id="compare-view"');
+    expect(webDashboardJs).toContain('/api/runs/compare?ids=');
   });
 
   it("ships Web UI launchers for macOS, Linux, and Windows", async () => {
@@ -123,6 +126,32 @@ describe("Web UI run orchestration", () => {
         body: JSON.stringify({ type: "invalid", config: {} }),
       });
       expect(invalid.status).toBe(400);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("compares compatible completed runs through the research API", async () => {
+    const root = await temporaryDirectory("jev-web-compare-");
+    const store = new RunStore(join(root, "runs"));
+    const manager = new RunManager(store, resolve("."));
+    await manager.init();
+    const first = await store.create("benchmark", { agents: ["jev"], dataset: "datasets/sample.jsonl" });
+    const second = await store.create("benchmark", { agents: ["gpt"], dataset: "datasets/sample.jsonl" });
+    await writeFile(join(first.artifactDir, "report.json"), JSON.stringify({ summaries: [{ agentId: "jev", decisions: 5, successRate: 1, legalActionRate: 1, exactMatchRate: 0, p50LatencyMs: 20, p95LatencyMs: 30 }] }));
+    await writeFile(join(second.artifactDir, "report.json"), JSON.stringify({ summaries: [{ agentId: "gpt", decisions: 5, successRate: 1, legalActionRate: 1, exactMatchRate: 0.8, p50LatencyMs: 200, p95LatencyMs: 300 }] }));
+    await store.update(first.id, { status: "completed", finishedAt: new Date().toISOString() });
+    await store.update(second.id, { status: "completed", finishedAt: new Date().toISOString() });
+    const server = createWebServer({ manager, projectRoot: resolve("."), port: 0 });
+    const port = await server.listen();
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/runs/compare?ids=${first.id},${second.id}`);
+      expect(response.status).toBe(200);
+      const comparison = await response.json();
+      expect(comparison.runType).toBe("benchmark");
+      expect(comparison.columns).toHaveLength(2);
+      expect(comparison.columns[0].values.exactMatchRate).toBe(0);
+      expect(comparison.columns[0].values.totalTokensPerDecision).toBeNull();
     } finally {
       await server.close();
     }

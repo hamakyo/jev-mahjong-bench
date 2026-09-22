@@ -4,6 +4,7 @@ import { extname, join, resolve } from "node:path";
 import { createModelRegistry } from "../providers/registry.js";
 import { webDashboardCss, webDashboardHtml, webDashboardJs } from "./dashboard.js";
 import { RunManager, type CreateRunInput } from "./run-manager.js";
+import { buildRunComparison } from "./research.js";
 
 export interface WebServerOptions {
   manager: RunManager;
@@ -175,7 +176,7 @@ async function handle(request: IncomingMessage, response: ServerResponse, manage
   const method = request.method ?? "GET";
   if (method !== "GET" && method !== "POST") return json(response, 405, { error: "method not allowed" });
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
-  if (url.pathname === "/" || url.pathname === "/new" || /^\/runs\/[^/]+$/.test(url.pathname)) {
+  if (url.pathname === "/" || url.pathname === "/new" || url.pathname === "/compare" || /^\/runs\/[^/]+$/.test(url.pathname)) {
     return text(response, "text/html; charset=utf-8", webDashboardHtml);
   }
   if (url.pathname === "/assets/web.js") return text(response, "text/javascript; charset=utf-8", webDashboardJs);
@@ -194,6 +195,13 @@ async function handle(request: IncomingMessage, response: ServerResponse, manage
     return json(response, 200, { registryHash: registry.hash, models });
   }
   if (url.pathname === "/api/datasets") return json(response, 200, await datasets(projectRoot));
+  if (url.pathname === "/api/runs/compare") {
+    if (method !== "GET") return json(response, 405, { error: "method not allowed" });
+    const ids = (url.searchParams.get("ids") ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+    if (new Set(ids).size !== ids.length) throw new Error("compare run IDs must be unique");
+    const inputs = await Promise.all(ids.map(async (id) => ({ run: await manager.store.get(id), result: await manager.store.result(id) })));
+    return json(response, 200, buildRunComparison(inputs));
+  }
   if (url.pathname === "/api/runs") {
     if (method === "GET") return json(response, 200, await manager.store.list());
     const input = await body(request);
