@@ -4,7 +4,8 @@ import { extname, join, resolve } from "node:path";
 import { createModelRegistry } from "../providers/registry.js";
 import { webDashboardCss, webDashboardHtml, webDashboardJs } from "./dashboard.js";
 import { RunManager, type CreateRunInput } from "./run-manager.js";
-import { buildRunComparison } from "./research.js";
+import { buildResearchSnapshots, buildRunComparison } from "./research.js";
+import { EXPERIMENT_TEMPLATES } from "./templates.js";
 
 export interface WebServerOptions {
   manager: RunManager;
@@ -195,6 +196,16 @@ async function handle(request: IncomingMessage, response: ServerResponse, manage
     return json(response, 200, { registryHash: registry.hash, models });
   }
   if (url.pathname === "/api/datasets") return json(response, 200, await datasets(projectRoot));
+  if (url.pathname === "/api/templates") {
+    if (method !== "GET") return json(response, 405, { error: "method not allowed" });
+    return json(response, 200, { templates: EXPERIMENT_TEMPLATES });
+  }
+  if (url.pathname === "/api/research/dashboard") {
+    if (method !== "GET") return json(response, 405, { error: "method not allowed" });
+    const completed = (await manager.store.list()).filter((run) => run.status === "completed").slice(0, 30);
+    const inputs = await Promise.all(completed.map(async (run) => ({ run, result: await manager.store.result(run.id) })));
+    return json(response, 200, { snapshots: buildResearchSnapshots(inputs) });
+  }
   if (url.pathname === "/api/runs/compare") {
     if (method !== "GET") return json(response, 405, { error: "method not allowed" });
     const ids = (url.searchParams.get("ids") ?? "").split(",").map((value) => value.trim()).filter(Boolean);

@@ -39,7 +39,11 @@ describe("Web UI run orchestration", () => {
     expect(webDashboardCss).toContain("[hidden] { display:none !important; }");
     expect(webDashboardHtml).toContain('id="run-search"');
     expect(webDashboardHtml).toContain('id="compare-view"');
+    expect(webDashboardHtml).toContain('id="research-snapshots"');
+    expect(webDashboardHtml).toContain('id="templates"');
     expect(webDashboardJs).toContain('/api/runs/compare?ids=');
+    expect(webDashboardJs).toContain('/api/research/dashboard');
+    expect(webDashboardJs).toContain('/api/templates');
   });
 
   it("ships Web UI launchers for macOS, Linux, and Windows", async () => {
@@ -78,6 +82,17 @@ describe("Web UI run orchestration", () => {
     expect(() => normalizeRunInput({ type: "unknown" as "benchmark", config: {} })).toThrow("type must be");
     expect(normalizeRunInput({ type: "hybrid-sweep", config: {} }).config.thresholds)
       .toEqual([...DEFAULT_HYBRID_THRESHOLDS]);
+    expect(normalizeRunInput({
+      type: "tournament",
+      config: { seats: "jev,gpt,random,random", games: 4, pairedRuns: 25 },
+    }).config).toMatchObject({
+      seats: ["jev", "gpt", "random", "random"],
+      pairedRuns: 25,
+    });
+    expect(normalizeRunInput({
+      type: "tournament",
+      config: { seats: "jev,gpt,random,random", games: 4, pairedRuns: 25 },
+    }).config).not.toHaveProperty("games");
   });
 
   it("persists stable config hashes and recovers interrupted runs", async () => {
@@ -118,6 +133,19 @@ describe("Web UI run orchestration", () => {
       expect(detail.artifacts).toEqual([expect.objectContaining({ path: "report.json" })]);
       expect((await (await fetch(`${origin}/api/models`)).json()).models[0]).not.toHaveProperty("apiKey");
       expect(Array.isArray(await (await fetch(`${origin}/api/datasets`)).json())).toBe(true);
+      const templates = await (await fetch(`${origin}/api/templates`)).json();
+      expect(templates.templates).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: "decision-benchmark", type: "benchmark" }),
+        expect.objectContaining({ id: "provider-arena", type: "tournament" }),
+        expect.objectContaining({ id: "paired-full-game", config: expect.objectContaining({ pairedRuns: 25 }) }),
+      ]));
+      const dashboard = await (await fetch(`${origin}/api/research/dashboard`)).json();
+      expect(dashboard.snapshots).toEqual([
+        expect.objectContaining({ runId: run.id, runType: "benchmark" }),
+      ]);
+      expect(dashboard.snapshots[0].columns[0]).toMatchObject({ entityId: "random" });
+      expect((await fetch(`${origin}/api/templates`, { method: "POST" })).status).toBe(405);
+      expect((await fetch(`${origin}/api/research/dashboard`, { method: "POST" })).status).toBe(405);
       const traversal = await fetch(`${origin}/api/runs/${run.id}/artifact?path=${encodeURIComponent("../../outside")}`);
       expect(traversal.status).toBe(400);
       const invalid = await fetch(`${origin}/api/runs`, {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildRunComparison } from "../src/server/research.js";
+import { buildResearchSnapshots, buildRunComparison } from "../src/server/research.js";
 import type { RunRecord, RunType } from "../src/server/run-store.js";
 
 function run(id: string, type: RunType, status: RunRecord["status"] = "completed"): RunRecord {
@@ -17,6 +17,24 @@ function run(id: string, type: RunType, status: RunRecord["status"] = "completed
 }
 
 describe("research run comparison", () => {
+  it("builds one latest headline snapshot per completed run type", () => {
+    const latest = run("run_latest", "benchmark");
+    latest.createdAt = "2026-09-23T03:00:00.000Z";
+    const older = run("run_older", "benchmark");
+    older.createdAt = "2026-09-22T03:00:00.000Z";
+    const snapshots = buildResearchSnapshots([
+      { run: latest, result: { summaries: [{ agentId: "jev", legalActionRate: 1, exactMatchRate: 0, p95LatencyMs: 40 }] } },
+      { run: older, result: { summaries: [{ agentId: "gpt", legalActionRate: 0.8, exactMatchRate: 0.7, p95LatencyMs: 400 }] } },
+      { run: run("run_hybrid", "hybrid-sweep"), result: { thresholdResults: [{ threshold: 0.3, agreementRate: 0.9, escalationRate: 0.2 }] } },
+      { run: run("run_active", "tournament", "running"), result: { metrics: { agents: [{ agentId: "random", meanRank: 1 }] } } },
+    ]);
+    expect(snapshots).toHaveLength(2);
+    expect(snapshots[0]).toMatchObject({ runId: "run_latest", runType: "benchmark" });
+    expect(snapshots[0]?.metrics.map(({ key }) => key)).toEqual(["legalActionRate", "exactMatchRate", "p95LatencyMs", "totalTokensPerDecision"]);
+    expect(snapshots[0]?.columns[0]?.values).toEqual({ legalActionRate: 1, exactMatchRate: 0, p95LatencyMs: 40, totalTokensPerDecision: null });
+    expect(snapshots[1]).toMatchObject({ runId: "run_hybrid", runType: "hybrid-sweep" });
+  });
+
   it("compares canonical decision metrics and preserves missing values as unavailable", () => {
     const comparison = buildRunComparison([
       {

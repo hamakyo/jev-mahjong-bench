@@ -23,6 +23,11 @@ export interface RunComparison {
   columns: ComparisonColumn[];
 }
 
+export interface ResearchSnapshot extends RunComparison {
+  runId: string;
+  createdAt: string;
+}
+
 export interface ComparisonInput {
   run: RunRecord;
   result: unknown;
@@ -72,6 +77,12 @@ const metrics: Record<RunType, ComparisonMetric[]> = {
   ],
 };
 
+const headlineMetricKeys: Record<RunType, string[]> = {
+  tournament: ["meanRank", "meanScore", "p95LatencyMs", "fallbackRate"],
+  benchmark: ["legalActionRate", "exactMatchRate", "p95LatencyMs", "totalTokensPerDecision"],
+  "hybrid-sweep": ["agreementRate", "escalationRate", "estimatedP95LatencyMs", "fallbackRate"],
+};
+
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
@@ -96,6 +107,16 @@ function metricValue(source: Record<string, unknown>, key: string): number | nul
   return typeof raw === "number" && Number.isFinite(raw) ? raw : null;
 }
 
+function columnsFor(input: ComparisonInput, definitions: ComparisonMetric[]): ComparisonColumn[] {
+  return rows(input.run.type, input.result).map(({ entityId, source }) => ({
+    runId: input.run.id,
+    configHash: input.run.configHash,
+    createdAt: input.run.createdAt,
+    entityId,
+    values: Object.fromEntries(definitions.map(({ key }) => [key, metricValue(source, key)])),
+  }));
+}
+
 export function buildRunComparison(inputs: ComparisonInput[]): RunComparison {
   if (inputs.length < 2) throw new Error("select at least two runs to compare");
   if (inputs.length > 8) throw new Error("compare supports at most eight runs");
@@ -103,13 +124,27 @@ export function buildRunComparison(inputs: ComparisonInput[]): RunComparison {
   if (inputs.some(({ run }) => run.type !== runType)) throw new Error("selected runs must have the same run type");
   if (inputs.some(({ run }) => run.status !== "completed")) throw new Error("only completed runs can be compared");
   const definitions = metrics[runType];
-  const columns = inputs.flatMap(({ run, result }) => rows(runType, result).map(({ entityId, source }) => ({
-    runId: run.id,
-    configHash: run.configHash,
-    createdAt: run.createdAt,
-    entityId,
-    values: Object.fromEntries(definitions.map(({ key }) => [key, metricValue(source, key)])),
-  })));
+  const columns = inputs.flatMap((input) => columnsFor(input, definitions));
   if (!columns.length) throw new Error("selected runs do not have comparable canonical results");
   return { runType, metrics: definitions, columns };
+}
+
+export function buildResearchSnapshots(inputs: ComparisonInput[]): ResearchSnapshot[] {
+  const seen = new Set<RunType>();
+  const snapshots: ResearchSnapshot[] = [];
+  for (const input of inputs) {
+    if (input.run.status !== "completed" || seen.has(input.run.type)) continue;
+    const definitions = metrics[input.run.type].filter(({ key }) => headlineMetricKeys[input.run.type].includes(key));
+    const columns = columnsFor(input, definitions);
+    if (!columns.length) continue;
+    snapshots.push({
+      runId: input.run.id,
+      createdAt: input.run.createdAt,
+      runType: input.run.type,
+      metrics: definitions,
+      columns,
+    });
+    seen.add(input.run.type);
+  }
+  return snapshots;
 }
