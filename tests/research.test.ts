@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildResearchSnapshots, buildRunComparison } from "../src/server/research.js";
+import { buildResearchSnapshots, buildResearchTrends, buildRunComparison } from "../src/server/research.js";
 import type { RunRecord, RunType } from "../src/server/run-store.js";
 
 function run(id: string, type: RunType, status: RunRecord["status"] = "completed"): RunRecord {
@@ -67,6 +67,25 @@ describe("research run comparison", () => {
       { run: run("run_h2", "hybrid-sweep"), result: { thresholdResults: [{ threshold: 0.5, agreementRate: 0.7, estimatedUsage: { totalTokens: 20 } }] } },
     ]);
     expect(hybrid.columns[0]).toMatchObject({ entityId: "hybrid@0.3", values: { agreementRate: 0.8, estimatedTotalTokens: 30 } });
+  });
+
+  it("builds chronological, type-specific trends and preserves zero values", () => {
+    const newer = run("run_new", "benchmark");
+    newer.createdAt = "2026-09-23T03:00:00.000Z";
+    const older = run("run_old", "benchmark");
+    older.createdAt = "2026-09-22T03:00:00.000Z";
+    const trends = buildResearchTrends([
+      { run: newer, result: { summaries: [{ agentId: "jev", exactMatchRate: 0.8 }] } },
+      { run: older, result: { summaries: [{ agentId: "jev", exactMatchRate: 0 }] } },
+      { run: run("run_t", "tournament"), result: { metrics: { agents: [{ agentId: "jev", meanRank: 2 }] } } },
+    ]);
+    expect(trends).toHaveLength(2);
+    expect(trends[0]).toMatchObject({ runType: "tournament", metric: { key: "meanRank" }, direction: "lower" });
+    expect(trends[1]).toMatchObject({ runType: "benchmark", metric: { key: "exactMatchRate" }, direction: "higher" });
+    expect(trends[1]?.series[0]?.points.map(({ runId, value }) => ({ runId, value }))).toEqual([
+      { runId: "run_old", value: 0 },
+      { runId: "run_new", value: 0.8 },
+    ]);
   });
 
   it("rejects incompatible, incomplete, or undersized selections", () => {

@@ -62,14 +62,24 @@ async function exists(path: string): Promise<boolean> {
 async function listFiles(root: string, directory: string): Promise<RunArtifact[]> {
   if (!await exists(directory)) return [];
   const artifacts: RunArtifact[] = [];
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
+  let entries;
+  try { entries = await readdir(directory, { withFileTypes: true }); } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return [];
+    throw error;
+  }
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) continue;
     const path = join(directory, entry.name);
     if (entry.isDirectory()) {
       artifacts.push(...await listFiles(root, path));
       continue;
     }
     if (!entry.isFile()) continue;
-    const details = await stat(path);
+    let details;
+    try { details = await stat(path); } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") continue;
+      throw error;
+    }
     artifacts.push({
       path: relative(root, path).split("\\").join("/"),
       bytes: details.size,

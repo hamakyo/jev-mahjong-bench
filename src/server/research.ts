@@ -28,6 +28,16 @@ export interface ResearchSnapshot extends RunComparison {
   createdAt: string;
 }
 
+export interface ResearchTrend {
+  runType: RunType;
+  metric: ComparisonMetric;
+  direction: "higher" | "lower";
+  series: Array<{
+    entityId: string;
+    points: Array<{ runId: string; createdAt: string; value: number; configHash: string }>;
+  }>;
+}
+
 export interface ComparisonInput {
   run: RunRecord;
   result: unknown;
@@ -81,6 +91,12 @@ const headlineMetricKeys: Record<RunType, string[]> = {
   tournament: ["meanRank", "meanScore", "p95LatencyMs", "fallbackRate"],
   benchmark: ["legalActionRate", "exactMatchRate", "p95LatencyMs", "totalTokensPerDecision"],
   "hybrid-sweep": ["agreementRate", "escalationRate", "estimatedP95LatencyMs", "fallbackRate"],
+};
+
+const trendMetricKeys: Record<RunType, { key: string; direction: "higher" | "lower" }> = {
+  tournament: { key: "meanRank", direction: "lower" },
+  benchmark: { key: "exactMatchRate", direction: "higher" },
+  "hybrid-sweep": { key: "agreementRate", direction: "higher" },
 };
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -147,4 +163,31 @@ export function buildResearchSnapshots(inputs: ComparisonInput[]): ResearchSnaps
     seen.add(input.run.type);
   }
   return snapshots;
+}
+
+export function buildResearchTrends(inputs: ComparisonInput[]): ResearchTrend[] {
+  const trends: ResearchTrend[] = [];
+  for (const runType of ["tournament", "benchmark", "hybrid-sweep"] as const) {
+    const selected = inputs
+      .filter(({ run }) => run.type === runType && run.status === "completed")
+      .sort((left, right) => left.run.createdAt.localeCompare(right.run.createdAt))
+      .slice(-12);
+    const choice = trendMetricKeys[runType];
+    const metric = metrics[runType].find(({ key }) => key === choice.key)!;
+    const grouped = new Map<string, ResearchTrend["series"][number]["points"]>();
+    for (const input of selected) {
+      for (const column of columnsFor(input, [metric])) {
+        const value = column.values[metric.key];
+        if (value === null || value === undefined) continue;
+        const points = grouped.get(column.entityId) ?? [];
+        points.push({ runId: column.runId, createdAt: column.createdAt, value, configHash: column.configHash });
+        grouped.set(column.entityId, points);
+      }
+    }
+    const series = [...grouped.entries()]
+      .map(([entityId, points]) => ({ entityId, points }))
+      .sort((left, right) => left.entityId.localeCompare(right.entityId));
+    if (series.length) trends.push({ runType, metric, direction: choice.direction, series });
+  }
+  return trends;
 }

@@ -41,11 +41,17 @@ describe("Web UI run orchestration", () => {
     expect(webDashboardHtml).toContain('id="compare-view"');
     expect(webDashboardHtml).toContain('id="published-view"');
     expect(webDashboardHtml).toContain('id="research-snapshots"');
+    expect(webDashboardHtml).toContain('id="research-trends"');
+    expect(webDashboardHtml).toContain('id="models-view"');
+    expect(webDashboardHtml).toContain('id="datasets-view"');
     expect(webDashboardHtml).toContain('id="templates"');
     expect(webDashboardJs).toContain('/api/runs/compare?ids=');
     expect(webDashboardJs).toContain('/api/research/dashboard');
     expect(webDashboardJs).toContain('/api/templates');
     expect(webDashboardJs).toContain('/api/benchmarks');
+    expect(webDashboardJs).toContain('/api/models');
+    expect(webDashboardJs).toContain('/api/datasets');
+    expect(webDashboardJs).toContain('/health');
   });
 
   it("ships Web UI launchers for macOS, Linux, and Windows", async () => {
@@ -122,6 +128,7 @@ describe("Web UI run orchestration", () => {
     await manager.init();
     const run = await store.create("benchmark", { agents: ["random"], dataset: "datasets/sample.jsonl" });
     await writeFile(join(run.artifactDir, "report.json"), JSON.stringify({ summaries: [{ agentId: "random" }] }));
+    await writeFile(join(run.artifactDir, ".report.json.in-progress.tmp"), "partial");
     await store.update(run.id, { status: "completed", finishedAt: new Date().toISOString() });
     const server = createWebServer({ manager, projectRoot: resolve("."), port: 0 });
     const port = await server.listen();
@@ -133,8 +140,17 @@ describe("Web UI run orchestration", () => {
       expect(detail.run.status).toBe("completed");
       expect(detail.result.summaries[0].agentId).toBe("random");
       expect(detail.artifacts).toEqual([expect.objectContaining({ path: "report.json" })]);
-      expect((await (await fetch(`${origin}/api/models`)).json()).models[0]).not.toHaveProperty("apiKey");
-      expect(Array.isArray(await (await fetch(`${origin}/api/datasets`)).json())).toBe(true);
+      const modelResponse = await (await fetch(`${origin}/api/models`)).json();
+      expect(modelResponse.source).toBe("models.example.yaml");
+      expect(modelResponse.models).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: "gpt", adapter: "responses", availability: expect.any(String) }),
+        expect.objectContaining({ id: "deepseek", adapter: "chat-completions/json" }),
+      ]));
+      expect(JSON.stringify(modelResponse)).not.toMatch(/apiKeyEnv|baseUrl|headers|OPENAI_API_KEY/);
+      const datasetResponse = await (await fetch(`${origin}/api/datasets`)).json();
+      expect(datasetResponse).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: "datasets/sample.jsonl", valid: true, samples: expect.any(Number), sha256: expect.stringMatching(/^[0-9a-f]{64}$/) }),
+      ]));
       expect(await (await fetch(`${origin}/api/benchmarks`)).json()).toEqual({ benchmarks: [] });
       const templates = await (await fetch(`${origin}/api/templates`)).json();
       expect(templates.templates).toEqual(expect.arrayContaining([
@@ -150,6 +166,8 @@ describe("Web UI run orchestration", () => {
       expect((await fetch(`${origin}/api/templates`, { method: "POST" })).status).toBe(405);
       expect((await fetch(`${origin}/api/research/dashboard`, { method: "POST" })).status).toBe(405);
       expect((await fetch(`${origin}/api/benchmarks`, { method: "POST" })).status).toBe(405);
+      expect((await fetch(`${origin}/api/models`, { method: "POST" })).status).toBe(405);
+      expect((await fetch(`${origin}/api/datasets`, { method: "POST" })).status).toBe(405);
       const traversal = await fetch(`${origin}/api/runs/${run.id}/artifact?path=${encodeURIComponent("../../outside")}`);
       expect(traversal.status).toBe(400);
       const invalid = await fetch(`${origin}/api/runs`, {
@@ -201,12 +219,17 @@ describe("Web UI run orchestration", () => {
     await manager.init();
     const run = await store.create("tournament", { seats: ["random", "random", "random", "random"] });
     await store.update(run.id, { status: "running", liveUrl: `http://127.0.0.1:${livePort}/` });
+    await writeFile(store.logPath(run.id, "stdout"), "ready\nAuthorization: Bearer sk-this-is-a-secret-token\n");
     const web = createWebServer({ manager, port: 0 });
     const webPort = await web.listen();
     try {
       const origin = `http://127.0.0.1:${webPort}`;
       const snapshot = await (await fetch(`${origin}/api/runs/${run.id}/snapshot?mode=spectator`)).json();
       expect(snapshot.streamId).toBe("run-scoped-live");
+      const health = await (await fetch(`${origin}/api/runs/${run.id}/health`)).json();
+      expect(health).toMatchObject({ available: true, decisions: 0, retries: 0, status429: 0, status503: 0 });
+      expect(health.logs.stdout).toContain("Bearer [REDACTED]");
+      expect(health.logs.stdout).not.toContain("sk-this-is-a-secret-token");
       const paused = await (await fetch(`${origin}/api/runs/${run.id}/control/pause`, { method: "POST" })).json();
       expect(paused.pauseRequested).toBe(true);
       expect(control.getSnapshot().pauseRequested).toBe(true);

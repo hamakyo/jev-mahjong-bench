@@ -1,11 +1,14 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { readdir, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { access, readFile, readdir, stat } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
-import { createModelRegistry } from "../providers/registry.js";
+import { datasetStats, validateDataset } from "../benchmark/dataset-tools.js";
+import { createModelRegistry, loadModelRegistry } from "../providers/registry.js";
 import { listPublishedBenchmarks, publishBenchmark } from "../publish/benchmark.js";
 import { webDashboardCss, webDashboardHtml, webDashboardJs } from "./dashboard.js";
+import { runHealth } from "./health.js";
 import { RunManager, type CreateRunInput } from "./run-manager.js";
-import { buildResearchSnapshots, buildRunComparison } from "./research.js";
+import { buildResearchSnapshots, buildResearchTrends, buildRunComparison } from "./research.js";
 import { EXPERIMENT_TEMPLATES } from "./templates.js";
 
 export interface WebServerOptions {
@@ -79,16 +82,65 @@ function contentType(path: string): string {
   return "application/octet-stream";
 }
 
-async function datasets(projectRoot: string): Promise<Array<{ path: string; bytes: number }>> {
+async function exists(path: string): Promise<boolean> {
+  try { await access(path); return true; } catch { return false; }
+}
+
+async function models(projectRoot: string): Promise<Record<string, unknown>> {
+  const candidates = ["models.yaml", "models.yml", "models.example.yaml"];
+  const source = (await Promise.all(candidates.map(async (name) => ({ name, found: await exists(join(projectRoot, name)) }))))
+    .find(({ found }) => found)?.name;
+  const registry = source ? await loadModelRegistry(join(projectRoot, source)) : createModelRegistry();
+  return {
+    registryHash: registry.hash,
+    source: source ?? "built-in",
+    models: [...registry.models.values()].map((model) => {
+      const configured = [model.apiKeyEnv, ...Object.values(model.headers ?? {}).map(({ env }) => env)]
+        .every((name) => Boolean(process.env[name]));
+      return {
+        id: model.id,
+        provider: model.provider,
+        model: model.model,
+        configured,
+        availability: configured ? "available" : "missing-credentials",
+        adapter: model.provider === "openai" ? "responses" : model.provider === "anthropic" ? "messages" : `chat-completions/${model.requestMode}`,
+        ...(model.reasoningEffort ? { reasoningEffort: model.reasoningEffort } : {}),
+        ...(model.maxOutputTokens !== undefined ? { maxOutputTokens: model.maxOutputTokens } : {}),
+        ...(model.requestMode ? { requestMode: model.requestMode } : {}),
+        fingerprint: model.fingerprint,
+      };
+    }),
+  };
+}
+
+async function datasets(projectRoot: string): Promise<Array<Record<string, unknown>>> {
   const root = join(projectRoot, "datasets");
   try {
-    const result: Array<{ path: string; bytes: number }> = [];
+    const result: Array<Record<string, unknown>> = [];
     for (const entry of await readdir(root, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+      if (!entry.isFile() || (!entry.name.endsWith(".jsonl") && !entry.name.endsWith(".jsonl.gz"))) continue;
       const path = join(root, entry.name);
-      result.push({ path: `datasets/${entry.name}`, bytes: (await stat(path)).size });
+      const [fileStat, bytes] = await Promise.all([stat(path), readFile(path)]);
+      const base = {
+        path: `datasets/${entry.name}`,
+        name: entry.name,
+        bytes: fileStat.size,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        role: /calibration/i.test(entry.name) ? "calibration" : /evaluation|eval/i.test(entry.name) ? "evaluation" : "general",
+      };
+      try {
+        const stats = await datasetStats(path);
+        try {
+          await validateDataset(path);
+          result.push({ ...base, valid: true, ...stats });
+        } catch (error) {
+          result.push({ ...base, valid: false, ...stats, error: error instanceof Error ? error.message : String(error) });
+        }
+      } catch (error) {
+        result.push({ ...base, valid: false, error: error instanceof Error ? error.message : String(error) });
+      }
     }
-    return result.sort((left, right) => left.path.localeCompare(right.path));
+    return result.sort((left, right) => String(left.path).localeCompare(String(right.path)));
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return [];
     throw error;
@@ -178,25 +230,20 @@ async function handle(request: IncomingMessage, response: ServerResponse, manage
   const method = request.method ?? "GET";
   if (method !== "GET" && method !== "POST") return json(response, 405, { error: "method not allowed" });
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
-  if (url.pathname === "/" || url.pathname === "/new" || url.pathname === "/compare" || url.pathname === "/published" || /^\/runs\/[^/]+$/.test(url.pathname)) {
+  if (url.pathname === "/" || url.pathname === "/new" || url.pathname === "/compare" || url.pathname === "/published" || url.pathname === "/models" || url.pathname === "/datasets" || /^\/runs\/[^/]+$/.test(url.pathname)) {
     return text(response, "text/html; charset=utf-8", webDashboardHtml);
   }
   if (url.pathname === "/assets/web.js") return text(response, "text/javascript; charset=utf-8", webDashboardJs);
   if (url.pathname === "/assets/web.css") return text(response, "text/css; charset=utf-8", webDashboardCss);
   if (url.pathname === "/api/health") return json(response, 200, { ok: true });
   if (url.pathname === "/api/models") {
-    const registry = createModelRegistry();
-    const models = [...registry.models.values()].map((model) => ({
-      id: model.id,
-      provider: model.provider,
-      model: model.model,
-      configured: Boolean(process.env[model.apiKeyEnv]),
-      apiKeyEnv: model.apiKeyEnv,
-      fingerprint: model.fingerprint,
-    }));
-    return json(response, 200, { registryHash: registry.hash, models });
+    if (method !== "GET") return json(response, 405, { error: "method not allowed" });
+    return json(response, 200, await models(projectRoot));
   }
-  if (url.pathname === "/api/datasets") return json(response, 200, await datasets(projectRoot));
+  if (url.pathname === "/api/datasets") {
+    if (method !== "GET") return json(response, 405, { error: "method not allowed" });
+    return json(response, 200, await datasets(projectRoot));
+  }
   if (url.pathname === "/api/benchmarks") {
     if (method !== "GET") return json(response, 405, { error: "method not allowed" });
     return json(response, 200, { benchmarks: await listPublishedBenchmarks(projectRoot) });
@@ -209,7 +256,7 @@ async function handle(request: IncomingMessage, response: ServerResponse, manage
     if (method !== "GET") return json(response, 405, { error: "method not allowed" });
     const completed = (await manager.store.list()).filter((run) => run.status === "completed").slice(0, 30);
     const inputs = await Promise.all(completed.map(async (run) => ({ run, result: await manager.store.result(run.id) })));
-    return json(response, 200, { snapshots: buildResearchSnapshots(inputs) });
+    return json(response, 200, { snapshots: buildResearchSnapshots(inputs), trends: buildResearchTrends(inputs) });
   }
   if (url.pathname === "/api/runs/compare") {
     if (method !== "GET") return json(response, 405, { error: "method not allowed" });
@@ -236,7 +283,7 @@ async function handle(request: IncomingMessage, response: ServerResponse, manage
     await proxyLive(request, response, run.liveUrl, upstreamPath, url.search);
     return;
   }
-  const runMatch = url.pathname.match(/^\/api\/runs\/([^/]+)(?:\/(cancel|replay|publish|report|artifacts|artifact|games))?$/);
+  const runMatch = url.pathname.match(/^\/api\/runs\/([^/]+)(?:\/(cancel|replay|publish|health|report|artifacts|artifact|games))?$/);
   if (!runMatch) return json(response, 404, { error: "not found" });
   const id = decodeURIComponent(runMatch[1]!);
   const action = runMatch[2];
@@ -251,6 +298,10 @@ async function handle(request: IncomingMessage, response: ServerResponse, manage
   }
   if (action === "cancel" && method === "POST") return json(response, 200, await manager.cancel(id));
   if (action === "replay" && method === "POST") return json(response, 200, { url: await manager.startReplay(id) });
+  if (action === "health" && method === "GET") {
+    const run = await manager.store.get(id);
+    return json(response, 200, await runHealth(manager.store, run));
+  }
   if (action === "publish" && method === "POST") {
     const input = await body(request);
     if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("publish input must be an object");
