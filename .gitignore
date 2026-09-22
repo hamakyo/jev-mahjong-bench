@@ -5,7 +5,7 @@ dist/
 results/**/*.json
 results/**/*.jsonl
 results/**/*.md
-!results/.gitkeep
+!results/README.md
 .DS_Store
 __pycache__/
 *.py[cod]

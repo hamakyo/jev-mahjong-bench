@@ -15,6 +15,7 @@ export interface RunRecord {
   finishedAt?: string;
   config: Record<string, unknown>;
   configHash: string;
+  benchmarkCommit?: string;
   artifactDir: string;
   liveUrl?: string;
   replayUrl?: string;
@@ -61,14 +62,24 @@ async function exists(path: string): Promise<boolean> {
 async function listFiles(root: string, directory: string): Promise<RunArtifact[]> {
   if (!await exists(directory)) return [];
   const artifacts: RunArtifact[] = [];
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
+  let entries;
+  try { entries = await readdir(directory, { withFileTypes: true }); } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return [];
+    throw error;
+  }
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) continue;
     const path = join(directory, entry.name);
     if (entry.isDirectory()) {
       artifacts.push(...await listFiles(root, path));
       continue;
     }
     if (!entry.isFile()) continue;
-    const details = await stat(path);
+    let details;
+    try { details = await stat(path); } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") continue;
+      throw error;
+    }
     artifacts.push({
       path: relative(root, path).split("\\").join("/"),
       bytes: details.size,
@@ -104,7 +115,7 @@ export class RunStore {
     return join(this.directory(id), `${stream}.log`);
   }
 
-  async create(type: RunType, config: Record<string, unknown>): Promise<RunRecord> {
+  async create(type: RunType, config: Record<string, unknown>, benchmarkCommit?: string): Promise<RunRecord> {
     await this.init();
     const id = runId(this.now());
     const directory = this.directory(id);
@@ -118,6 +129,7 @@ export class RunStore {
       createdAt: this.now().toISOString(),
       config: structuredClone(config),
       configHash: createHash("sha256").update(canonical(config)).digest("hex"),
+      ...(benchmarkCommit ? { benchmarkCommit } : {}),
       artifactDir,
     };
     await this.write(record);
