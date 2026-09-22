@@ -77,6 +77,9 @@ stores subprocess stdout/stderr beside that metadata; and exposes configuration,
 status, canonical results, artifacts, Live, and Replay from the run detail page.
 A different store can be selected with `--runs-dir <path>`. The Hybrid-sweep
 form uses the same `0.20,0.25,0.30,0.35,0.40,0.50` defaults as the CLI.
+The research console also provides searchable run history, compatible-run
+comparison, latest-result KPI snapshots, editable experiment templates, and a
+Published Benchmarks view.
 
 Run metadata is written atomically and includes a stable configuration hash.
 An interrupted `queued` or `running` run is marked failed when the control
@@ -86,10 +89,21 @@ not be exposed to an untrusted network.
 
 The API includes `GET/POST /api/runs`; `GET /api/runs/:runId`; run-scoped
 `report`, `artifacts`, `artifact?path=...`, and `games` reads; `POST` routes for
-`cancel` and `replay`; and Live `snapshot`, `events`, `control`,
+`cancel`, `replay`, and explicit `publish`; research dashboard, comparison,
+template, and published-benchmark reads; and Live `snapshot`, `events`, `control`,
 `control/pause`, `control/resume`, and `control/step` routes. `GET /api/models`
 reports only safe model metadata and credential availability; it never returns
 credential values.
+
+Generated runs stay ignored under `results/`. Promote a completed run into a
+Git-tracked aggregate record under `benchmarks/` from Run Detail or with:
+
+```bash
+pnpm benchmark:publish -- --run-id <run-id> --category providers --slug jev-vs-gpt
+```
+
+See [`benchmarks/README.md`](benchmarks/README.md) for the retention, naming,
+secret-safety, and external raw-artifact policy.
 
 ### Run Jev and GPT
 

@@ -15,6 +15,7 @@ export interface RunRecord {
   finishedAt?: string;
   config: Record<string, unknown>;
   configHash: string;
+  benchmarkCommit?: string;
   artifactDir: string;
   liveUrl?: string;
   replayUrl?: string;
@@ -104,7 +105,7 @@ export class RunStore {
     return join(this.directory(id), `${stream}.log`);
   }
 
-  async create(type: RunType, config: Record<string, unknown>): Promise<RunRecord> {
+  async create(type: RunType, config: Record<string, unknown>, benchmarkCommit?: string): Promise<RunRecord> {
     await this.init();
     const id = runId(this.now());
     const directory = this.directory(id);
@@ -118,6 +119,7 @@ export class RunStore {
       createdAt: this.now().toISOString(),
       config: structuredClone(config),
       configHash: createHash("sha256").update(canonical(config)).digest("hex"),
+      ...(benchmarkCommit ? { benchmarkCommit } : {}),
       artifactDir,
     };
     await this.write(record);

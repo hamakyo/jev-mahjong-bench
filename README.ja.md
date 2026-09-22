@@ -63,16 +63,30 @@ Run metadataと同じディレクトリへ保存します。Run metadataは
 `results/runs/<run-id>/run.json`へ原子的に保存し、`--runs-dir <path>`で保存先を
 変更できます。Hybrid sweep formの既定候補はCLIと同じ
 `0.20,0.25,0.30,0.35,0.40,0.50`です。
+検索可能なRun履歴、互換Runの比較、最新結果のKPI、編集可能な実験テンプレート、
+公開済みベンチマーク画面も同じUIから利用できます。
 
 各Runには安定したconfig hashがあります。control planeの停止時に実行中だったRunは、
 再起動時にfailedとして明示されますが、ログと既存成果物は保持します。既定のbind先は
 `127.0.0.1`で認証機能はないため、信頼できないネットワークへ公開しないでください。
 
 APIは`GET/POST /api/runs`、`GET /api/runs/:runId`、Run単位の`report`、
-`artifacts`、`artifact?path=...`、`games`、`cancel`、`replay`を提供します。
+`artifacts`、`artifact?path=...`、`games`、`cancel`、`replay`、明示的な`publish`を
+提供します。リサーチ概要、比較、テンプレート、公開済みベンチマークの読み取りAPIも
+あります。
 Live用には`snapshot`、`events`、`control`、`control/pause`、`control/resume`、
 `control/step`があります。`GET /api/models`が返すのはprovider/model ID、credential
 設定有無などの安全なmetadataだけで、credential値は返しません。
+
+生成したRunは`results/`に置かれ、Gitから除外されます。完了RunをGit管理する集計記録へ
+明示的に昇格するには、Run詳細画面または次のコマンドを使います。
+
+```bash
+pnpm benchmark:publish -- --run-id <run-id> --category providers --slug jev-vs-gpt
+```
+
+命名、保持、secret対策、raw artifactの外部保管方針は
+[`benchmarks/README.md`](benchmarks/README.md)を参照してください。
 
 ## 判断ベンチマーク
 

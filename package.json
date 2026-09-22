@@ -22,6 +22,7 @@
     "replay:serve": "tsx src/cli.ts replay:serve",
     "video:export": "tsx src/cli.ts video:export",
     "hybrid:sweep": "tsx src/cli.ts hybrid:sweep",
+    "benchmark:publish": "tsx src/publish-cli.ts",
     "web": "tsx src/cli.ts web",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",

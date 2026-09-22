@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import { access } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -140,6 +140,15 @@ async function freePort(): Promise<number> {
   });
 }
 
+async function gitCommit(projectRoot: string): Promise<string | undefined> {
+  return new Promise((resolvePromise) => {
+    execFile("git", ["-C", projectRoot, "rev-parse", "HEAD"], (error, stdout) => {
+      const commit = stdout.trim();
+      resolvePromise(!error && /^[0-9a-f]{40}$/.test(commit) ? commit : undefined);
+    });
+  });
+}
+
 export class RunManager {
   readonly store: RunStore;
   private readonly projectRoot: string;
@@ -158,7 +167,7 @@ export class RunManager {
 
   async start(input: CreateRunInput): Promise<RunRecord> {
     const normalized = normalizeRunInput(input);
-    const run = await this.store.create(normalized.type, normalized.config);
+    const run = await this.store.create(normalized.type, normalized.config, await gitCommit(this.projectRoot));
     void this.execute(run).catch(async (error: unknown) => {
       await this.store.update(run.id, {
         status: "failed",

@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { readdir, stat } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
 import { createModelRegistry } from "../providers/registry.js";
+import { listPublishedBenchmarks, publishBenchmark } from "../publish/benchmark.js";
 import { webDashboardCss, webDashboardHtml, webDashboardJs } from "./dashboard.js";
 import { RunManager, type CreateRunInput } from "./run-manager.js";
 import { buildResearchSnapshots, buildRunComparison } from "./research.js";
@@ -177,7 +178,7 @@ async function handle(request: IncomingMessage, response: ServerResponse, manage
   const method = request.method ?? "GET";
   if (method !== "GET" && method !== "POST") return json(response, 405, { error: "method not allowed" });
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
-  if (url.pathname === "/" || url.pathname === "/new" || url.pathname === "/compare" || /^\/runs\/[^/]+$/.test(url.pathname)) {
+  if (url.pathname === "/" || url.pathname === "/new" || url.pathname === "/compare" || url.pathname === "/published" || /^\/runs\/[^/]+$/.test(url.pathname)) {
     return text(response, "text/html; charset=utf-8", webDashboardHtml);
   }
   if (url.pathname === "/assets/web.js") return text(response, "text/javascript; charset=utf-8", webDashboardJs);
@@ -196,6 +197,10 @@ async function handle(request: IncomingMessage, response: ServerResponse, manage
     return json(response, 200, { registryHash: registry.hash, models });
   }
   if (url.pathname === "/api/datasets") return json(response, 200, await datasets(projectRoot));
+  if (url.pathname === "/api/benchmarks") {
+    if (method !== "GET") return json(response, 405, { error: "method not allowed" });
+    return json(response, 200, { benchmarks: await listPublishedBenchmarks(projectRoot) });
+  }
   if (url.pathname === "/api/templates") {
     if (method !== "GET") return json(response, 405, { error: "method not allowed" });
     return json(response, 200, { templates: EXPERIMENT_TEMPLATES });
@@ -231,16 +236,35 @@ async function handle(request: IncomingMessage, response: ServerResponse, manage
     await proxyLive(request, response, run.liveUrl, upstreamPath, url.search);
     return;
   }
-  const runMatch = url.pathname.match(/^\/api\/runs\/([^/]+)(?:\/(cancel|replay|report|artifacts|artifact|games))?$/);
+  const runMatch = url.pathname.match(/^\/api\/runs\/([^/]+)(?:\/(cancel|replay|publish|report|artifacts|artifact|games))?$/);
   if (!runMatch) return json(response, 404, { error: "not found" });
   const id = decodeURIComponent(runMatch[1]!);
   const action = runMatch[2];
   if (!action && method === "GET") {
-    const [run, artifacts, result] = await Promise.all([manager.store.get(id), manager.store.artifacts(id), manager.store.result(id)]);
-    return json(response, 200, { run, artifacts, ...(result === undefined ? {} : { result }) });
+    const [run, artifacts, result, published] = await Promise.all([
+      manager.store.get(id),
+      manager.store.artifacts(id),
+      manager.store.result(id),
+      listPublishedBenchmarks(projectRoot),
+    ]);
+    return json(response, 200, { run, artifacts, published: published.filter((item) => item.manifest.sourceRunId === id), ...(result === undefined ? {} : { result }) });
   }
   if (action === "cancel" && method === "POST") return json(response, 200, await manager.cancel(id));
   if (action === "replay" && method === "POST") return json(response, 200, { url: await manager.startReplay(id) });
+  if (action === "publish" && method === "POST") {
+    const input = await body(request);
+    if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("publish input must be an object");
+    const values = input as Record<string, unknown>;
+    if (values.category !== undefined && typeof values.category !== "string") throw new Error("category must be a string");
+    if (values.slug !== undefined && typeof values.slug !== "string") throw new Error("slug must be a string");
+    return json(response, 201, await publishBenchmark({
+      projectRoot,
+      store: manager.store,
+      runId: id,
+      ...(typeof values.category === "string" ? { category: values.category } : {}),
+      ...(typeof values.slug === "string" ? { slug: values.slug } : {}),
+    }));
+  }
   if (action === "report" && method === "GET") {
     const result = await manager.store.result(id);
     return result === undefined ? json(response, 404, { error: "result is not available" }) : json(response, 200, result);

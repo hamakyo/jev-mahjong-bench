@@ -39,11 +39,13 @@ describe("Web UI run orchestration", () => {
     expect(webDashboardCss).toContain("[hidden] { display:none !important; }");
     expect(webDashboardHtml).toContain('id="run-search"');
     expect(webDashboardHtml).toContain('id="compare-view"');
+    expect(webDashboardHtml).toContain('id="published-view"');
     expect(webDashboardHtml).toContain('id="research-snapshots"');
     expect(webDashboardHtml).toContain('id="templates"');
     expect(webDashboardJs).toContain('/api/runs/compare?ids=');
     expect(webDashboardJs).toContain('/api/research/dashboard');
     expect(webDashboardJs).toContain('/api/templates');
+    expect(webDashboardJs).toContain('/api/benchmarks');
   });
 
   it("ships Web UI launchers for macOS, Linux, and Windows", async () => {
@@ -133,6 +135,7 @@ describe("Web UI run orchestration", () => {
       expect(detail.artifacts).toEqual([expect.objectContaining({ path: "report.json" })]);
       expect((await (await fetch(`${origin}/api/models`)).json()).models[0]).not.toHaveProperty("apiKey");
       expect(Array.isArray(await (await fetch(`${origin}/api/datasets`)).json())).toBe(true);
+      expect(await (await fetch(`${origin}/api/benchmarks`)).json()).toEqual({ benchmarks: [] });
       const templates = await (await fetch(`${origin}/api/templates`)).json();
       expect(templates.templates).toEqual(expect.arrayContaining([
         expect.objectContaining({ id: "decision-benchmark", type: "benchmark" }),
@@ -146,6 +149,7 @@ describe("Web UI run orchestration", () => {
       expect(dashboard.snapshots[0].columns[0]).toMatchObject({ entityId: "random" });
       expect((await fetch(`${origin}/api/templates`, { method: "POST" })).status).toBe(405);
       expect((await fetch(`${origin}/api/research/dashboard`, { method: "POST" })).status).toBe(405);
+      expect((await fetch(`${origin}/api/benchmarks`, { method: "POST" })).status).toBe(405);
       const traversal = await fetch(`${origin}/api/runs/${run.id}/artifact?path=${encodeURIComponent("../../outside")}`);
       expect(traversal.status).toBe(400);
       const invalid = await fetch(`${origin}/api/runs`, {
@@ -230,6 +234,7 @@ describe("Web UI run orchestration", () => {
     }
     await manager.close();
     expect(current.status).toBe("completed");
+    expect(current.benchmarkCommit).toMatch(/^[0-9a-f]{40}$/);
     expect(await store.result(run.id)).toMatchObject({ summaries: [expect.objectContaining({ agentId: "random" })] });
     expect((await store.artifacts(run.id)).map((artifact) => artifact.path)).toEqual(expect.arrayContaining(["report.json", "report.md"]));
   }, 25_000);
