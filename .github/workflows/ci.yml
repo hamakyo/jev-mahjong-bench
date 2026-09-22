@@ -127,6 +127,7 @@ jobs:
           enable-cache: true
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:layout
       - run: pnpm tournament -- --seats random,random,random,random --games 1 --mode 4p-red-east --rule tenhou --seed 42 --out /tmp/video-tournament
       - run: |
           set -euo pipefail

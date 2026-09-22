@@ -142,6 +142,13 @@ export async function exportReplayVideo(options: VideoExportOptions): Promise<vo
         ? "cursor=" + frameState.cursor
         : "decision=" + frameState.decisionIndex;
       await page.goto("http://127.0.0.1:" + port + "/?mode=" + (options.debug ? "debug" : "spectator") + "&locale=" + encodeURIComponent(locale) + "&" + navigation, { waitUntil: "networkidle" });
+      // Keep the complete square table in the encoded viewport, without replay controls.
+      await page.addStyleTag({ content: `
+        header, main > .replay-controls, main > .summary { display: none; }
+        main { width: calc(100% - 2rem); margin: 1rem auto; }
+        .mahjong-table { max-width: min(46rem, calc(100vh - 6rem)); }
+        .debug-section { max-height: calc(100vh - 2rem); overflow: auto; }
+      ` });
       await page.waitForFunction(() => Array.from(document.images).every((image) => image.complete && image.naturalWidth > 0));
       await page.evaluate(async () => {
         await Promise.all(Array.from(document.images).map((image) => typeof image.decode === "function" ? image.decode().catch(() => undefined) : Promise.resolve()));

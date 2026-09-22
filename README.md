@@ -253,6 +253,12 @@ the current discard and riichi declaration are highlighted. Spectator exposes
 concealed-hand counts and tile backs only. Debug mode may show reconstructed
 hands and provider diagnostics.
 
+The table keeps a 1:1 aspect ratio at every screen width. Melds occupy a separate
+area at each player's right edge (bottom-right, top-right, top-left, bottom-left
+for the bottom, right, top, left seats). Added kan tiles stack above the original
+sideways pon tile. Run `pnpm test:layout` with Chromium installed to check actual
+browser geometry at mobile, tablet, and desktop widths.
+
 Tile faces are vendored locally from
 [FluffyStuff/riichi-mahjong-tiles](https://github.com/FluffyStuff/riichi-mahjong-tiles)
 under its public-domain/CC0 notice in

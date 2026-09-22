@@ -19,9 +19,9 @@ export type Wind = "E" | "S" | "W" | "N";
 export const POSITION_BY_PLAYER = ["bottom", "right", "top", "left"] as const satisfies readonly PhysicalSeatPosition[];
 export const ROTATION_BY_POSITION: Record<PhysicalSeatPosition, 0 | 90 | 180 | -90> = {
   bottom: 0,
-  right: 90,
+  right: -90,
   top: 180,
-  left: -90,
+  left: 90,
 };
 
 export const PRESENTATION_VERSION = 2 as const;

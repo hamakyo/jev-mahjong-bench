@@ -82,7 +82,7 @@ export const decisionTableRendererJs = String.raw`
 export const tableStateRendererJs = String.raw`
 ${tileCatalogRuntimeJs}
   const tablePositions = ["top", "left", "right", "bottom"];
-  const tableRotations = { bottom: "0deg", right: "90deg", top: "180deg", left: "-90deg" };
+  const tableRotations = { bottom: "0deg", right: "-90deg", top: "180deg", left: "90deg" };
   const tableSeatForPlayer = (snapshot, player) => Number.isInteger(player)
     ? Object.values(snapshot.table?.seats || {}).find((seat) => seat && seat.playerIndex === player)
     : undefined;
@@ -126,7 +126,7 @@ ${tileCatalogRuntimeJs}
   const calledTileIndexForSource = (meld, playerIndex) => {
     if (typeof meld.calledTileIndex === "number") return meld.calledTileIndex;
     if (typeof meld.fromPlayer !== "number" || !Number.isInteger(playerIndex)) return undefined;
-    const tileCount = Array.isArray(meld.tiles) ? meld.tiles.length : 0;
+    const tileCount = Array.isArray(meld.tiles) ? meld.tiles.length - (meld.type === "kakan" ? 1 : 0) : 0;
     if (!tileCount) return undefined;
     const relative = (meld.fromPlayer - playerIndex + 4) % 4;
     if (relative === 3) return 0;
@@ -135,7 +135,17 @@ ${tileCatalogRuntimeJs}
   };
   const renderMeld = (meld, playerIndex) => {
     const calledIndex = calledTileIndexForSource(meld, playerIndex);
-    return (meld.tiles || []).map((tile, index) => assetTile((meld.concealedIndexes || []).includes(index) ? "Back.svg" : tile, (calledIndex === index ? "called" : "face"), meld.concealedIndexes?.includes(index) ? "concealed meld tile" : tile)).join("");
+    const tiles = Array.isArray(meld.tiles) ? meld.tiles : [];
+    const addedIndex = meld.type === "kakan" && tiles.length > 3 && Number.isInteger(calledIndex) && calledIndex >= 0 && calledIndex < tiles.length - 1 ? tiles.length - 1 : -1;
+    const renderedTiles = tiles.map((tile, index) => {
+      if (index === addedIndex) return "";
+      const concealed = (meld.concealedIndexes || []).includes(index);
+      const face = assetTile(concealed ? "Back.svg" : tile, concealed ? "concealed" : "face", concealed ? localeRuntime.t("table.concealed") : tile);
+      if (index !== calledIndex) return face;
+      const added = addedIndex >= 0 ? assetTile(tiles[addedIndex], "face kakan-added", tiles[addedIndex]) : "";
+      return '<span class="called-stack' + (added ? ' kakan-stack' : '') + '">' + face + added + '</span>';
+    }).join("");
+    return '<span class="meld-set" data-meld-type="' + escapeHtml(meld.type) + '">' + renderedTiles + '</span>';
   };
   const renderRiver = (seat, snapshot, mode) => (seat.river || []).map((riverTile, index) => {
     const latest = snapshot.table?.latestDiscard?.playerIndex === seat.playerIndex && snapshot.table?.latestDiscard?.riverIndex === index;
@@ -160,7 +170,9 @@ ${tileCatalogRuntimeJs}
       const current = seat.playerIndex === snapshot.currentSeat;
       const dealer = seat.isDealer;
       const labels = '<div class="seat-labels"><strong>' + escapeHtml(seat.agentId) + '</strong><span>' + escapeHtml(localeRuntime.formatSeat(seat.currentWind)) + (dealer ? ' · ' + label("table.dealer") : '') + '</span><span>' + escapeHtml(String(seat.score)) + (seat.rank == null ? '' : ' · ' + label("table.rank") + ' ' + escapeHtml(String(seat.rank))) + '</span></div>';
-      const tiles = '<div class="oriented-frame" style="--seat-rotation:' + tableRotations[position] + '"><div class="oriented-tiles"><div class="table-hand" aria-label="' + escapeHtml(label("table.hand")) + '">' + visibleHand(seat, mode) + '</div><div class="table-melds" aria-label="' + escapeHtml(label("table.melds")) + '">' + (seat.melds || []).map((meld) => renderMeld(meld, seat.playerIndex)).join('<span class="meld-gap"></span>') + '</div><div class="river" aria-label="' + escapeHtml(label("table.discards")) + '">' + renderRiver(seat, snapshot, mode) + '</div></div></div>';
+      const melds = (seat.melds || []).map((meld) => renderMeld(meld, seat.playerIndex)).join("");
+      const meldSlot = melds ? '<div class="meld-slot"><div class="table-melds" aria-label="' + escapeHtml(label("table.melds")) + '">' + melds + '</div></div>' : '';
+      const tiles = '<div class="oriented-frame" style="--seat-rotation:' + tableRotations[position] + '"><div class="oriented-tiles"><div class="hand-area"><div class="table-hand" aria-label="' + escapeHtml(label("table.hand")) + '">' + visibleHand(seat, mode) + '</div></div><div class="river" aria-label="' + escapeHtml(label("table.discards")) + '">' + renderRiver(seat, snapshot, mode) + '</div></div>' + meldSlot + '</div>';
       return '<div class="seat-zone position-' + position + (current ? ' current-actor' : '') + (dealer ? ' dealer' : '') + '" data-player-index="' + seat.playerIndex + '">' + labels + tiles + '</div>';
     }).join("");
     root.innerHTML = zones + central;

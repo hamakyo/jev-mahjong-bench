@@ -206,6 +206,11 @@ Spectatorの主画面は、四席を固定した卓上表示です。player inde
 では非公開手牌を枚数と牌背だけで表示し、Debugでのみ復元した手牌とprovider診断を表示
 できます。Live、Replay、動画書き出しは同じrendererを使います。
 
+卓は画面幅や牌数にかかわらず1:1を維持します。副露は手牌から分離し、各家から見た
+卓の右端へ配置します（下席＝右下、右席＝右上、上席＝左上、左席＝左下）。加槓牌は
+元のポンの横向き牌に重ねます。Chromiumをインストールした環境で`pnpm test:layout`を
+実行すると、モバイル・タブレット・デスクトップ幅で実際のブラウザ座標を検証できます。
+
 牌画像は[FluffyStuff/riichi-mahjong-tiles](https://github.com/FluffyStuff/riichi-mahjong-tiles)
 からローカルvendorしています。public domain／CC0の出典は
 `src/live/dashboard/assets/tiles/NOTICE.md`に記録し、MJAIの牌IDと赤牌を含むasset対応は

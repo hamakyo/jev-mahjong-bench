@@ -32,7 +32,7 @@ describe("table presentation", () => {
 
     let snapshot = store.getSnapshot("spectator");
     expect(POSITION_BY_PLAYER).toEqual(["bottom", "right", "top", "left"]);
-    expect(ROTATION_BY_POSITION).toEqual({ bottom: 0, right: 90, top: 180, left: -90 });
+    expect(ROTATION_BY_POSITION).toEqual({ bottom: 0, right: -90, top: 180, left: 90 });
     expect(snapshot.table.seats.bottom).toMatchObject({ playerIndex: 0, agentId: "duplicate", currentWind: "E", isDealer: true });
     expect(snapshot.table.seats.right).toMatchObject({ playerIndex: 1, agentId: "duplicate", currentWind: "S", isDealer: false });
     expect(snapshot.table.seats.top).toMatchObject({ playerIndex: 2, agentId: "random", currentWind: "W" });
@@ -125,7 +125,7 @@ describe("table presentation", () => {
   it("shares oriented table rendering and serves vendored SVG assets", async () => {
     expect(tableStateRendererJs).toContain("function renderMahjongTable");
     expect(dashboardCss).toContain("grid-template-columns: repeat(6");
-    expect(tableStateRendererJs).toContain("right: \"90deg\"");
+    expect(tableStateRendererJs).toContain("right: \"-90deg\"");
     expect(tileAssetFilename("0m")).toBe("Man5-Dora.svg");
     expect(tileAssetFilename("5pr")).toBe("Pin5-Dora.svg");
     expect(["E", "S", "W", "N", "P", "F", "C"].map(tileAssetFilename)).toEqual([
@@ -140,7 +140,15 @@ describe("table presentation", () => {
     expect(tableStateRendererJs).toContain("hiddenHand = (count, drawnTilePending)");
     expect(tableStateRendererJs).toContain("drawnBack");
     expect(tableStateRendererJs).toContain("class=\"tile-body\"");
-    expect(dashboardCss).toContain(".table-hand { flex-wrap: nowrap");
+    expect(tableStateRendererJs).toContain("class=\"hand-area\"");
+    expect(tableStateRendererJs).toContain("class=\"meld-slot\"");
+    expect(tableStateRendererJs).toContain("class=\"meld-set");
+    expect(tableStateRendererJs).toContain("kakan-added");
+    expect(dashboardCss).toContain("aspect-ratio: 1 / 1");
+    expect(dashboardCss).toContain(".hand-area { display: flex");
+    expect(dashboardCss).toContain(".meld-slot { position: absolute");
+    expect(dashboardCss).toContain("inset-inline-end");
+    expect(dashboardCss).toContain(".river { display: grid; grid-template-columns: repeat(6, max-content)");
     const hub = new LiveEventHub({ streamId: "asset-stream" });
     const server = createLiveServer({ hub, snapshots: new SnapshotStore(hub.streamId), port: 0 });
     const port = await server.listen();
