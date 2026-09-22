@@ -36,6 +36,13 @@ function integer(value: string | null, fallback: number): number {
   return parsed;
 }
 
+function optionalInteger(value: string | null, name: string): number | undefined {
+  if (value === null || value === "") return undefined;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) throw new Error(`${name} must be an integer`);
+  return parsed;
+}
+
 function jsonResponse(response: ServerResponse, status: number, value: unknown): void {
   const body = JSON.stringify(value);
   response.writeHead(status, {
@@ -70,29 +77,30 @@ export const replayDashboardHtml = `<!doctype html>
     <main>
       <section class="replay-controls">
         <button id="play" type="button" data-i18n="controls.play">Play</button>
-        <button id="previous" type="button" data-i18n="controls.previous">Previous</button>
-        <button id="next" type="button" data-i18n="controls.next">Next</button>
+        <button id="previous" type="button" data-i18n="controls.previousDecision">Previous decision</button>
+        <button id="next" type="button" data-i18n="controls.nextDecision">Next decision</button>
         <button id="previous-hand" type="button" data-i18n="controls.previousHand">Previous hand</button>
         <button id="hand-start" type="button" data-i18n="controls.handStart">Hand start</button>
         <button id="hand-end" type="button" data-i18n="controls.handEnd">Hand end</button>
         <button id="next-hand" type="button" data-i18n="controls.nextHand">Next hand</button>
         <label><span data-i18n="controls.speed">Speed</span> <select id="speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
         <label><span data-i18n="controls.mode">Mode</span> <select id="mode-select"><option value="spectator" data-i18n="mode.spectator">Spectator</option><option value="debug" data-i18n="mode.debug">Debug</option></select></label>
-        <span id="cursor-label">0 / 0</span>
-        <input id="cursor" type="range" min="0" max="0" value="0">
+        <span id="selection-label" class="selection-label">—</span>
       </section>
       <section class="summary grid">
         <article><span data-i18n="table.round">Round</span><strong id="round">—</strong></article>
         <article><span data-i18n="table.honba">Honba</span><strong id="honba">0</strong></article>
         <article><span data-i18n="table.kyotaku">Kyotaku</span><strong id="kyotaku">0</strong></article>
         <article><span data-i18n="replay.hand">Hand</span><strong id="hand">—</strong></article>
+        <article><span data-i18n="replay.decision">Decision</span><strong id="decision">—</strong></article>
         <article><span data-i18n="table.dealer">Dealer</span><strong id="dealer">—</strong></article>
         <article><span data-i18n="table.currentTurn">Current turn</span><strong id="current-turn">—</strong></article>
         <article><span data-i18n="table.status">Status</span><strong id="status">idle</strong></article>
       </section>
-      <section class="table-section"><h2 data-i18n="table.mahjongTable">Mahjong table</h2><div id="mahjong-table" class="mahjong-table"></div></section>
-      <section><h2 data-i18n="sections.recentDecisions">Recent decisions</h2><div id="decisions" class="table-wrap"></div></section>
-      <section id="debug-section" class="debug-section" hidden><h2 data-i18n="sections.debugSnapshot">Debug snapshot</h2><div id="debug-inspector" class="debug-inspector" hidden><h3 data-i18n="sections.debugInspector">Inspector</h3><div id="debug-inspector-content"></div></div><pre id="debug"></pre></section>
+      <div id="replay-stage" class="replay-stage">
+        <section class="table-section"><h2 data-i18n="table.mahjongTable">Mahjong table</h2><div id="mahjong-table" class="mahjong-table"></div></section>
+        <section id="debug-section" class="debug-section" hidden><h2 data-i18n="sections.analysis">Analysis</h2><div id="debug-inspector" class="debug-inspector"><h3 data-i18n="sections.debugInspector">Inspector</h3><div id="debug-inspector-content"></div></div><div class="raw-debug"><div class="raw-debug-header"><span data-i18n="replay.rawCursor">Raw event cursor</span><span id="cursor-label">0 / 0</span></div><input id="cursor" type="range" min="0" max="0" value="0"><pre id="debug"></pre></div></section>
+      </div>
     </main>
     <script src="/assets/app.js" defer></script>
   </body>
@@ -107,8 +115,10 @@ ${decisionTableRendererJs}
   const params = new URLSearchParams(location.search);
   let mode = params.get("mode") === "debug" ? "debug" : "spectator";
   let cursor = Number(params.get("cursor") || 0);
+  let requestedDecision = params.has("decision") ? Number(params.get("decision")) : undefined;
   let eventCount = 0;
-  let replayIndex = { games: [] };
+  let replayIndex = { games: [], decisions: [] };
+  let selection = { rawCursor: cursor, decisionIndex: null, handIndex: null, handDecisionNumber: null, handDecisionCount: 0, hasPreviousDecision: false, hasNextDecision: false, hasPreviousHand: false, hasNextHand: false };
   let playing = false;
   let timer;
   let requestGeneration = 0;
@@ -132,44 +142,59 @@ ${decisionTableRendererJs}
   function handContaining(value, all) {
     return all.find((entry) => entry.hand.startSequence <= value && value <= handEnd(entry, all));
   }
-  function previousHand(value, all) {
-    return all.filter((entry) => handEnd(entry, all) < value).at(-1);
+  function selectedHand(all) {
+    return all.find((entry) => entry.game.gameId === selection.gameId && entry.hand.handIndex === selection.handIndex)
+      || handContaining(selection.rawCursor, all);
   }
-  function nextHand(value, all) {
-    return all.find((entry) => entry.hand.startSequence > value);
+  function firstDecision(entry) {
+    const index = entry?.hand?.decisionIndices?.[0];
+    return Number.isInteger(index) ? index : undefined;
   }
-  function updateHandControls() {
+  function updateControls() {
     const all = hands();
-    const current = handContaining(cursor, all);
+    const current = selectedHand(all);
+    const currentIndex = current ? all.findIndex((entry) => entry.game.gameId === current.game.gameId && entry.hand.handIndex === current.hand.handIndex) : -1;
     setText("hand", current ? String(current.hand.handIndex + 1) + " / " + String(current.game.hands.length) : "—");
+    setText("decision", selection.handDecisionNumber == null ? "—" : String(selection.handDecisionNumber) + " / " + String(selection.handDecisionCount));
+    const action = selection.actionType ? localeRuntime.formatActionType(selection.actionType) : label("replay.noSelection");
+    setText("selection-label", selection.agentId ? label("replay.selectedDecision", { agent: selection.agentId, action }) : action);
+    $("previous").disabled = !selection.hasPreviousDecision;
+    $("next").disabled = !selection.hasNextDecision;
     $("hand-start").disabled = !current;
     $("hand-end").disabled = !current;
-    $("previous-hand").disabled = !previousHand(cursor, all);
-    $("next-hand").disabled = !nextHand(cursor, all);
+    $("previous-hand").disabled = currentIndex <= 0;
+    $("next-hand").disabled = currentIndex < 0 || currentIndex >= all.length - 1;
+    $("cursor").value = String(selection.rawCursor);
+    setText("cursor-label", selection.rawCursor + " / " + eventCount);
   }
-  function goTo(value) {
-    cursor = Math.max(0, Math.min(eventCount, value));
+  function goToRaw(value) {
+    requestedDecision = undefined;
+    cursor = Math.max(0, Math.min(eventCount, Math.floor(value)));
+    void refresh().catch((error) => { $("connection").textContent = error.message; });
+  }
+  function goToDecision(index) {
+    if (!Number.isInteger(index) || index < 0 || index >= replayIndex.decisions.length) return;
+    requestedDecision = index;
     void refresh().catch((error) => { $("connection").textContent = error.message; });
   }
   function render(snapshot, metadata) {
+    selection = metadata.selection || selection;
     setText("round", localeRuntime.formatRound(snapshot.round));
     setText("honba", snapshot.honba);
     setText("kyotaku", snapshot.kyotaku);
     setText("dealer", localeRuntime.formatSeat(tableWindForPlayer(snapshot, snapshot.oya)));
     setText("current-turn", localeRuntime.formatSeat(tableWindForPlayer(snapshot, snapshot.currentSeat)));
     setText("status", localeRuntime.formatStatus(snapshot.status));
-    updateHandControls();
-    setText("cursor-label", metadata.cursor + " / " + metadata.eventCount);
-    $("cursor").value = metadata.cursor;
+    updateControls();
     renderTableState(snapshot, mode);
     renderDecisionTable(snapshot, mode);
     const debugSection = $("debug-section");
     debugSection.hidden = mode !== "debug";
-    const debugInspector = $("debug-inspector");
-    debugInspector.hidden = mode !== "debug";
+    $("replay-stage").classList.toggle("debug-mode", mode === "debug");
     if (mode === "debug") {
-      renderDebugInspector(snapshot);
-      $("debug").textContent = JSON.stringify(snapshot.debug || {}, null, 2);
+      const selectedInspector = metadata.selection ? Object.assign({}, metadata.selection, metadata.selection.debug || {}) : undefined;
+      renderDebugInspector(snapshot, selectedInspector);
+      $("debug").textContent = JSON.stringify({ snapshot: snapshot.debug || {}, selection: metadata.selection || {} }, null, 2);
     }
   }
   localeRuntime.setSnapshotRenderer((body) => {
@@ -187,13 +212,17 @@ ${decisionTableRendererJs}
     const controller = new AbortController();
     requestController = controller;
     try {
-      const response = await fetch("/api/replay/snapshot?cursor=" + cursor + "&mode=" + mode, { cache: "no-store", signal: controller.signal });
+      const query = new URLSearchParams({ mode });
+      if (requestedDecision !== undefined && Number.isSafeInteger(requestedDecision)) query.set("decision", String(requestedDecision));
+      else query.set("cursor", String(cursor));
+      const response = await fetch("/api/replay/snapshot?" + query.toString(), { cache: "no-store", signal: controller.signal });
       if (!response.ok) throw new Error(label("connection.replaySnapshotRequestFailed"));
       const body = await response.json();
       if (generation !== requestGeneration) return;
       cursor = body.replay.cursor;
       eventCount = body.replay.eventCount;
       $("cursor").max = eventCount;
+      selection = body.replay.selection || selection;
       localeRuntime.rememberSnapshot(body);
       render(body, body.replay);
       $("connection").textContent = label("connection.offlineReplay");
@@ -208,20 +237,20 @@ ${decisionTableRendererJs}
     clearTimeout(timer);
     if (!playing) return;
     timer = setTimeout(async () => {
-      if (cursor >= eventCount) { playing = false; $("play").textContent = label("controls.play"); return; }
-      cursor += 1;
-      await refresh().catch((error) => { $("connection").textContent = error.message; });
+      const next = selection.decisionIndex == null ? 0 : selection.decisionIndex + 1;
+      if (next >= replayIndex.decisions.length) { playing = false; $("play").textContent = label("controls.play"); return; }
+      goToDecision(next);
       schedule();
-    }, 1000 / (Number($("speed").value) * 10));
+    }, 1000 / Number($("speed").value));
   }
   $("play").addEventListener("click", () => { playing = !playing; $("play").textContent = playing ? label("controls.pause") : label("controls.play"); schedule(); });
-  $("previous").addEventListener("click", () => goTo(cursor - 1));
-  $("next").addEventListener("click", () => goTo(cursor + 1));
-  $("cursor").addEventListener("input", (event) => goTo(Number(event.target.value)));
-  $("hand-start").addEventListener("click", () => { const all = hands(); const current = handContaining(cursor, all); if (current) goTo(current.hand.startSequence); });
-  $("hand-end").addEventListener("click", () => { const all = hands(); const current = handContaining(cursor, all); if (current) goTo(handEnd(current, all)); });
-  $("previous-hand").addEventListener("click", () => { const entry = previousHand(cursor, hands()); if (entry) goTo(entry.hand.startSequence); });
-  $("next-hand").addEventListener("click", () => { const entry = nextHand(cursor, hands()); if (entry) goTo(entry.hand.startSequence); });
+  $("previous").addEventListener("click", () => goToDecision(selection.decisionIndex - 1));
+  $("next").addEventListener("click", () => goToDecision(selection.decisionIndex == null ? 0 : selection.decisionIndex + 1));
+  $("cursor").addEventListener("input", (event) => goToRaw(Number(event.target.value)));
+  $("hand-start").addEventListener("click", () => { const current = selectedHand(hands()); if (current) goToRaw(current.hand.startSequence); });
+  $("hand-end").addEventListener("click", () => { const all = hands(); const current = selectedHand(all); if (current) goToRaw(handEnd(current, all)); });
+  $("previous-hand").addEventListener("click", () => { const all = hands(); const current = selectedHand(all); const position = current ? all.findIndex((entry) => entry.game.gameId === current.game.gameId && entry.hand.handIndex === current.hand.handIndex) : -1; const entry = position > 0 ? all[position - 1] : undefined; if (entry) goToDecision(firstDecision(entry)); });
+  $("next-hand").addEventListener("click", () => { const all = hands(); const current = selectedHand(all); const position = current ? all.findIndex((entry) => entry.game.gameId === current.game.gameId && entry.hand.handIndex === current.hand.handIndex) : -1; const entry = position >= 0 ? all[position + 1] : undefined; if (entry) goToDecision(firstDecision(entry)); });
   $("mode-select").value = mode;
   $("mode").textContent = modeLabel();
   if (mode === "debug") $("mode").classList.add("debug");
@@ -233,7 +262,7 @@ ${decisionTableRendererJs}
     eventCount = manifest.eventCount;
     replayIndex = index;
     $("cursor").max = eventCount;
-    updateHandControls();
+    updateControls();
     return refresh();
   }).catch((error) => { $("connection").textContent = error.message; });
 })();`;
@@ -298,10 +327,16 @@ async function handleReplayRequest(
   }
   if (url.pathname === "/api/health") return jsonResponse(response, 200, { ok: true, eventCount: options.timeline.eventCount });
   if (url.pathname === "/api/replay/manifest") return jsonResponse(response, 200, options.timeline.data.manifest);
-  if (url.pathname === "/api/replay/index") return jsonResponse(response, 200, options.timeline.data.index);
+  if (url.pathname === "/api/replay/index") return jsonResponse(response, 200, options.timeline.navigationIndex);
   if (url.pathname === "/api/replay/snapshot") {
     const cursor = integer(url.searchParams.get("cursor"), 0);
-    const snapshot = options.timeline.snapshot(cursor, mode(url.searchParams.get("mode")));
+    const decisionIndex = optionalInteger(url.searchParams.get("decision"), "decision");
+    const selectedMode = mode(url.searchParams.get("mode"));
+    const snapshot = options.timeline.snapshot(cursor, selectedMode, decisionIndex);
+    const selection = {
+      ...snapshot.selection,
+      ...(selectedMode === "debug" && snapshot.selectionDebug ? { debug: snapshot.selectionDebug } : {}),
+    };
     return jsonResponse(response, 200, {
       ...snapshot.snapshot,
       replay: {
@@ -309,6 +344,7 @@ async function handleReplayRequest(
         eventCount: options.timeline.eventCount,
         checkpointSequence: snapshot.checkpointSequence,
         appliedDeltaCount: snapshot.appliedDeltaCount,
+        selection,
       },
     });
   }

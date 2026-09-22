@@ -1,24 +1,37 @@
 import { createLiveEventBatch } from "../live/projector.js";
 import { SnapshotStore, type LiveSnapshot } from "../live/snapshot.js";
 import type { LiveMode, SequencedLiveEvent, PublicLiveEvent, DebugLiveEvent } from "../live/events.js";
-import type { ReplayCheckpointRecord, ReplayEventRecord } from "./schema.js";
+import type { ReplayCheckpointRecord } from "./schema.js";
 import type { ReplayData } from "./loader.js";
+import {
+  buildReplayNavigationIndex,
+  createReplaySelection,
+  debugDetailsForDecision,
+  selectReplayDecision,
+  type ReplayNavigationIndex,
+  type ReplaySelection,
+  type ReplaySelectionResult,
+} from "./navigation.js";
 
 export interface ReplaySnapshotResult {
   cursor: number;
   snapshot: LiveSnapshot;
   checkpointSequence: number;
   appliedDeltaCount: number;
+  selection: ReplaySelection;
+  selectionDebug?: ReplaySelectionResult["debug"];
 }
 
 export class ReplayTimeline {
   readonly data: ReplayData;
+  readonly navigationIndex: ReplayNavigationIndex;
   private readonly sortedCheckpoints: ReplayCheckpointRecord[];
   private lastAppliedDeltaCount = 0;
 
   constructor(data: ReplayData) {
     this.data = data;
     this.sortedCheckpoints = [...data.checkpoints].sort((left, right) => left.sequence - right.sequence);
+    this.navigationIndex = buildReplayNavigationIndex(data.events, data.index);
   }
 
   get eventCount(): number {
@@ -46,8 +59,15 @@ export class ReplayTimeline {
       });
   }
 
-  snapshot(cursor: number, mode: LiveMode = "spectator"): ReplaySnapshotResult {
-    const target = Math.max(0, Math.min(this.eventCount, Math.floor(cursor)));
+  snapshot(cursor: number, mode: LiveMode = "spectator", decisionIndex?: number): ReplaySnapshotResult {
+    const requestedCursor = Math.max(0, Math.min(this.eventCount, Math.floor(cursor)));
+    const requestedDecision = decisionIndex === undefined
+      ? undefined
+      : this.navigationIndex.decisions[decisionIndex];
+    if (decisionIndex !== undefined && !requestedDecision) throw new Error("decision index is out of range");
+    const selected = selectReplayDecision(this.navigationIndex, requestedCursor, decisionIndex);
+    const target = Math.max(0, Math.min(this.eventCount, Math.floor(decisionIndex === undefined ? requestedCursor : selected?.snapshotSequence ?? requestedCursor)));
+    const selectionResult = createReplaySelection(this.navigationIndex, target, selected?.index);
     const checkpoint = this.latestCheckpoint(target);
     const store = new SnapshotStore(this.data.manifest.streamId);
     const restored = checkpoint ? store.restore(checkpoint.snapshot) : false;
@@ -61,7 +81,19 @@ export class ReplayTimeline {
       snapshot: store.getSnapshot(mode),
       checkpointSequence: base,
       appliedDeltaCount: this.lastAppliedDeltaCount,
+      selection: selectionResult.selection,
+      ...(mode === "debug" && selected
+        ? { selectionDebug: debugDetailsForDecision(this.data.events, selected) }
+        : {}),
     };
+  }
+
+  snapshotFor(options: {
+    cursor?: number;
+    decisionIndex?: number;
+    mode?: LiveMode;
+  }): ReplaySnapshotResult {
+    return this.snapshot(options.cursor ?? 0, options.mode ?? "spectator", options.decisionIndex);
   }
 
   private latestCheckpoint(cursor: number): ReplayCheckpointRecord | undefined {
