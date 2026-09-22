@@ -9,7 +9,7 @@ import { LiveEventHub } from "../src/live/hub.js";
 import { SnapshotStore } from "../src/live/snapshot.js";
 import { TournamentControl } from "../src/live/control.js";
 import { createLiveServer } from "../src/live/server.js";
-import { webDashboardHtml, webDashboardJs } from "../src/server/dashboard.js";
+import { webDashboardCss, webDashboardHtml, webDashboardJs } from "../src/server/dashboard.js";
 import { DEFAULT_HYBRID_THRESHOLDS } from "../src/benchmark/hybrid-sweep.js";
 
 const temporaryDirectories: string[] = [];
@@ -28,6 +28,15 @@ describe("Web UI run orchestration", () => {
   it("ships syntactically valid browser JavaScript", () => {
     expect(() => new Function(webDashboardJs)).not.toThrow();
     expect(webDashboardHtml).toContain(`value="${DEFAULT_HYBRID_THRESHOLDS.join(",")}"`);
+  });
+
+  it("offers persistent English and Japanese UI without gradients or shadows", () => {
+    expect(webDashboardHtml).toContain('data-locale="en"');
+    expect(webDashboardHtml).toContain('data-locale="ja"');
+    expect(webDashboardJs).toContain('localStorage.setItem("jev-web-locale",state.locale)');
+    expect(webDashboardJs).toContain('"dashboard.title":"実行一覧"');
+    expect(webDashboardCss).not.toMatch(/gradient|(?:box|text)-shadow|drop-shadow/i);
+    expect(webDashboardCss).toContain("[hidden] { display:none !important; }");
   });
 
   it("normalizes supported run types and rejects unsafe shapes", () => {
