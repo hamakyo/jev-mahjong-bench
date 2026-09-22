@@ -129,14 +129,19 @@ export async function exportReplayVideo(options: VideoExportOptions): Promise<vo
       throw new Error("video export requires an installed Chromium browser; run `pnpm exec playwright install chromium`", { cause: error });
     }
     const page = await browser.newPage({ viewport });
-    const events = timeline.events(range.from, range.to, options.debug ? "debug" : "spectator");
+    const decisions = timeline.navigationIndex.decisions.filter((decision) =>
+      decision.snapshotSequence >= range.from && decision.snapshotSequence <= range.to,
+    );
+    const framesToRender = decisions.length
+      ? decisions.map((decision) => ({ decisionIndex: decision.index, type: decision.actionType ?? "decision:end" }))
+      : [{ decisionIndex: undefined, cursor: range.from, type: "game:start" }];
     let frame = 0;
-    for (const event of events) {
-      const type = event.event.type === "mjai" && event.event.event && typeof event.event.event === "object"
-        ? String((event.event.event as Record<string, unknown>).type ?? "mjai")
-        : event.event.type;
-      const frames = frameCount(durationMs(type, options.speed), options.fps);
-      await page.goto("http://127.0.0.1:" + port + "/?mode=" + (options.debug ? "debug" : "spectator") + "&locale=" + encodeURIComponent(locale) + "&cursor=" + event.id, { waitUntil: "networkidle" });
+    for (const frameState of framesToRender) {
+      const frames = frameCount(durationMs(frameState.type, options.speed), options.fps);
+      const navigation = frameState.decisionIndex === undefined
+        ? "cursor=" + frameState.cursor
+        : "decision=" + frameState.decisionIndex;
+      await page.goto("http://127.0.0.1:" + port + "/?mode=" + (options.debug ? "debug" : "spectator") + "&locale=" + encodeURIComponent(locale) + "&" + navigation, { waitUntil: "networkidle" });
       await page.waitForFunction(() => Array.from(document.images).every((image) => image.complete && image.naturalWidth > 0));
       await page.evaluate(async () => {
         await Promise.all(Array.from(document.images).map((image) => typeof image.decode === "function" ? image.decode().catch(() => undefined) : Promise.resolve()));

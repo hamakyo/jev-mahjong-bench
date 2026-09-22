@@ -270,10 +270,15 @@ nearest checkpoint.
 pnpm replay:serve -- --input results/live --port 3000
 ```
 
-The replay UI supports play/pause, single-event navigation, cursor scrubbing,
-speed selection, and Spectator/Debug mode. Spectator replay applies the same
-public projector as the live stream; concealed tiles and provider diagnostics
-remain unavailable.
+The replay UI supports play/pause and decision-level navigation: previous/next
+decision, previous/next hand, hand start/end, and playback speed. The URL
+parameter `decision=<index>` is the primary selection; the existing
+`cursor=<sequence>` remains a compatibility/debug entry point. Raw event
+positions are shown only in Debug. Spectator replay applies the same public
+projector as the live stream and contains only table state plus public
+selection metadata; concealed tiles and provider diagnostics remain
+unavailable. Debug places the selected decision's analysis inspector beside
+the table.
 
 ### Video export
 

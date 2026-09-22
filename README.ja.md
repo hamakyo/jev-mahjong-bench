@@ -220,9 +220,12 @@ Spectatorの主画面は、四席を固定した卓上表示です。player inde
 pnpm replay:serve -- --input results/live --port 3000
 ```
 
-Replay画面では再生／停止、イベント単位の前後移動、slider、速度変更、
-Spectator／Debug切替を行えます。Spectatorはliveと同じ公開projectorを通るため、
-手牌やprovider診断は表示されません。
+Replay画面では再生／停止、判断単位の前後移動、前後の局、局頭／局末、速度変更、
+Spectator／Debug切替を行えます。URLは`decision=<index>`を主な選択方法とし、
+既存の`cursor=<sequence>`も互換・Debug用に残しています。raw eventの位置はDebug
+だけに表示します。Spectatorはliveと同じ公開projectorを通り、卓と公開判断メタデータ
+だけを表示するため、手牌やprovider診断は表示されません。Debugでは選択した判断の
+Analysis inspectorを卓の横に表示します。
 
 ### 動画書き出し
 
