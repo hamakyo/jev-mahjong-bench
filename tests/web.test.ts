@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -37,6 +37,19 @@ describe("Web UI run orchestration", () => {
     expect(webDashboardJs).toContain('"dashboard.title":"実行一覧"');
     expect(webDashboardCss).not.toMatch(/gradient|(?:box|text)-shadow|drop-shadow/i);
     expect(webDashboardCss).toContain("[hidden] { display:none !important; }");
+  });
+
+  it("ships Web UI launchers for macOS, Linux, and Windows", async () => {
+    const [macos, linux, windows] = await Promise.all([
+      readFile("scripts/start-web-macos.command", "utf8"),
+      readFile("scripts/start-web-linux.sh", "utf8"),
+      readFile("scripts/start-web-windows.bat", "utf8"),
+    ]);
+    expect(macos).toContain("start-web-linux.sh");
+    expect(linux).toContain('source .env');
+    expect(linux).toContain('${WEB_PORT:-3001}');
+    expect(windows).toContain('if not defined WEB_PORT set "WEB_PORT=3001"');
+    expect(windows).toContain("call pnpm web");
   });
 
   it("normalizes supported run types and rejects unsafe shapes", () => {

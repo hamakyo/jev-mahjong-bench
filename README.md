@@ -63,6 +63,13 @@ Start the local experiment control plane and open the printed URL:
 pnpm web -- --port 3001
 ```
 
+The launchers below load `.env` when present and start the Web UI on
+`http://127.0.0.1:3001`. Set `WEB_HOST` or `WEB_PORT` to override either value.
+
+- macOS: double-click `scripts/start-web-macos.command`
+- Linux: run `./scripts/start-web-linux.sh`
+- Windows: double-click `scripts\\start-web-windows.bat`
+
 The Web UI launches the existing CLI workflows rather than maintaining a
 second benchmark implementation. It supports tournament, decision-benchmark,
 and Hybrid-sweep runs; persists each run under `results/runs/<run-id>/run.json`;

@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GenericLlmGameAgent } from "../src/agents/llm.js";
 import { inspectGameDecisionInput, MAX_LLM_INPUT_BYTES } from "../src/game/input.js";
@@ -29,6 +30,12 @@ describe("model registry", () => {
     expect(first.resolve("demo")).not.toHaveProperty("apiKey");
     expect(() => loadModelRegistryFromYaml("models:\n  random:\n    provider: openai\n    model: x")).toThrow(/reserved/);
     expect(() => loadModelRegistryFromYaml("models:\n  demo:\n    provider: openai\n    model: x\n    unknown: true")).toThrow(/unknown field/);
+  });
+
+  it("ships the documented GPT Luna and DeepSeek model IDs", async () => {
+    const registry = loadModelRegistryFromYaml(await readFile("models.example.yaml", "utf8"));
+    expect(registry.resolve("gptluna")).toMatchObject({ provider: "openai", model: "gpt-5.6-luna" });
+    expect(registry.resolve("deepseek")).toMatchObject({ provider: "openai-compatible", model: "deepseek-chat" });
   });
 });
 

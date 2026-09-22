@@ -49,6 +49,13 @@ pnpm bench:sample
 pnpm web -- --port 3001
 ```
 
+次の起動スクリプトは`.env`を読み込み、Web UIを`http://127.0.0.1:3001`で
+起動します。接続先は`WEB_HOST`、ポートは`WEB_PORT`で変更できます。
+
+- macOS: `scripts/start-web-macos.command`をダブルクリック
+- Linux: `./scripts/start-web-linux.sh`を実行
+- Windows: `scripts\\start-web-windows.bat`をダブルクリック
+
 Web UIは別のベンチマーク実装を持たず、既存のCLI経路を起動します。Tournament、
 Decision benchmark、Hybrid sweepを作成でき、各Runの設定、状態、canonicalな結果、
 成果物、Live、Replayへの導線をRun詳細に集約します。subprocessのstdout/stderrログは

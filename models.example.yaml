@@ -1,6 +1,14 @@
 # Copy this file to models.yaml and set the referenced environment variables.
 # Secret values are intentionally never stored in this file or benchmark output.
 models:
+  gptluna:
+    provider: openai
+    model: gpt-5.6-luna
+    reasoningEffort: none
+    maxOutputTokens: 128
+    apiKeyEnv: OPENAI_API_KEY
+
+  # Backwards-compatible descriptive alias for gptluna.
   openai-luna:
     provider: openai
     model: gpt-5.6-luna
