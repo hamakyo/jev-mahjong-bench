@@ -139,6 +139,8 @@ describe("table presentation", () => {
     expect(tableStateRendererJs).toContain("tableWindForPlayer(snapshot, snapshot.currentSeat)");
     expect(tableStateRendererJs).toContain("hiddenHand = (count, drawnTilePending)");
     expect(tableStateRendererJs).toContain("drawnBack");
+    expect(tableStateRendererJs).toContain("class=\"tile-body\"");
+    expect(dashboardCss).toContain(".table-hand { flex-wrap: nowrap");
     const hub = new LiveEventHub({ streamId: "asset-stream" });
     const server = createLiveServer({ hub, snapshots: new SnapshotStore(hub.streamId), port: 0 });
     const port = await server.listen();

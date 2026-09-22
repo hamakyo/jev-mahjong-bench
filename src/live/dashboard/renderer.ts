@@ -4,15 +4,21 @@
  */
 import { tileCatalogRuntimeJs } from "./tiles.js";
 export const decisionTableRendererJs = String.raw`
-  function renderDebugInspector(snapshot) {
+  function renderDebugInspector(snapshot, selected) {
     const node = $("debug-inspector-content");
     if (!node) return;
     const label = (key, params) => localeRuntime.t(key, params);
     const debug = snapshot.debug || {};
-    const seat = snapshot.currentSeat == null ? undefined : seats[snapshot.currentSeat];
-    const legalActions = seat && Array.isArray(debug.legalActionsBySeat?.[seat]) ? debug.legalActionsBySeat[seat] : [];
-    const diagnostics = seat && debug.diagnosticsBySeat?.[seat] && typeof debug.diagnosticsBySeat[seat] === "object" ? debug.diagnosticsBySeat[seat] : {};
-    const providerMetadata = seat && debug.providerMetadataBySeat?.[seat] && typeof debug.providerMetadataBySeat[seat] === "object" ? debug.providerMetadataBySeat[seat] : {};
+    const selectedDebug = selected && typeof selected === "object" ? selected : {};
+    const selectedPlayer = Number.isInteger(selected?.player) ? selected.player : snapshot.currentSeat;
+    const seat = selectedPlayer == null ? undefined : seats[selectedPlayer];
+    const legalActions = Array.isArray(selectedDebug.legalActions)
+      ? selectedDebug.legalActions
+      : seat && Array.isArray(debug.legalActionsBySeat?.[seat]) ? debug.legalActionsBySeat[seat] : [];
+    const diagnostics = selectedDebug.diagnostics && typeof selectedDebug.diagnostics === "object" ? selectedDebug.diagnostics
+      : seat && debug.diagnosticsBySeat?.[seat] && typeof debug.diagnosticsBySeat[seat] === "object" ? debug.diagnosticsBySeat[seat] : {};
+    const providerMetadata = selectedDebug.metadata && typeof selectedDebug.metadata === "object" ? selectedDebug.metadata
+      : seat && debug.providerMetadataBySeat?.[seat] && typeof debug.providerMetadataBySeat[seat] === "object" ? debug.providerMetadataBySeat[seat] : {};
     const diagnosticProviderMetadata = diagnostics.providerMetadata && typeof diagnostics.providerMetadata === "object" && !Array.isArray(diagnostics.providerMetadata) ? diagnostics.providerMetadata : {};
     const finalSource = typeof diagnostics.hybridTrace?.finalSource === "string" ? diagnostics.hybridTrace.finalSource : undefined;
     const providerSource = finalSource === "jev-fallback" ? "jev" : finalSource === "jev" || finalSource === "gpt" ? finalSource : undefined;
@@ -26,7 +32,7 @@ export const decisionTableRendererJs = String.raw`
         : hasProviderIdentity(diagnosticProviderMetadata)
           ? diagnosticProviderMetadata
           : {};
-    const decision = seat && snapshot.decisionsBySeat?.[seat] ? snapshot.decisionsBySeat[seat] : (snapshot.lastDecisions || []).find((item) => item.player === snapshot.currentSeat);
+    const decision = selectedDebug.appliedAction || selectedDebug.requestedAction || (seat && snapshot.decisionsBySeat?.[seat] ? snapshot.decisionsBySeat[seat] : (snapshot.lastDecisions || []).find((item) => item.player === selectedPlayer));
     const actionText = legalActions.map((action) => {
       const rawType = String(action?.type || "unknown");
       const translated = localeRuntime.formatActionType(rawType);
@@ -34,42 +40,42 @@ export const decisionTableRendererJs = String.raw`
       return String(action?.id || rawType) + " · " + typeText;
     }).join(", ") || "—";
     const probabilityText = diagnostics.probabilities && typeof diagnostics.probabilities === "object" ? JSON.stringify(diagnostics.probabilities) : "—";
-    const inputTokens = typeof decision?.inputTokens === "number" ? decision.inputTokens : undefined;
-    const outputTokens = typeof decision?.outputTokens === "number" ? decision.outputTokens : undefined;
+    const inputTokens = typeof selectedDebug.inputTokens === "number" ? selectedDebug.inputTokens : typeof decision?.inputTokens === "number" ? decision.inputTokens : undefined;
+    const outputTokens = typeof selectedDebug.outputTokens === "number" ? selectedDebug.outputTokens : typeof decision?.outputTokens === "number" ? decision.outputTokens : undefined;
     const totalTokens = inputTokens === undefined && outputTokens === undefined ? "—" : String((inputTokens || 0) + (outputTokens || 0));
     const provider = selectedProviderMetadata.provider ?? selectedProviderMetadata.providerId ?? "—";
     const model = selectedProviderMetadata.modelId ?? selectedProviderMetadata.model ?? selectedProviderMetadata.requestedModel ?? "—";
+    const appliedText = selectedDebug.appliedAction ? JSON.stringify(selectedDebug.appliedAction) : decision?.actionType || "—";
+    const requestedText = selectedDebug.requestedAction ? JSON.stringify(selectedDebug.requestedAction) : "—";
+    const rawEvents = Array.isArray(selectedDebug.rawEvents) ? selectedDebug.rawEvents.length : 0;
+    const hybridText = diagnostics.hybridTrace && typeof diagnostics.hybridTrace === "object" ? JSON.stringify(diagnostics.hybridTrace) : "—";
+    const validity = selectedDebug.isLegal === undefined ? (decision?.isLegal === undefined ? "—" : String(decision.isLegal)) : String(selectedDebug.isLegal);
+    const seatFormatter = typeof localeRuntime.formatSeat === "function" ? localeRuntime.formatSeat : (value) => String(value ?? "—");
+    const selectedSeatLabel = selectedPlayer == null ? "—" : seatFormatter(typeof tableWindForPlayer === "function" ? tableWindForPlayer(snapshot, selectedPlayer) : selectedPlayer);
     node.innerHTML = '<dl class="debug-inspector-grid">' +
+      '<div><dt>' + label("decision.agent") + '</dt><dd>' + escapeHtml(selected?.agentId || decision?.agentId || "—") + '</dd></div>' +
+      '<div><dt>' + label("decision.seat") + '</dt><dd>' + escapeHtml(selectedSeatLabel) + '</dd></div>' +
+      '<div><dt>' + label("decision.requested") + '</dt><dd>' + escapeHtml(requestedText) + '</dd></div>' +
+      '<div><dt>' + label("decision.applied") + '</dt><dd>' + escapeHtml(appliedText) + '</dd></div>' +
       '<div><dt>' + label("debug.legalActions") + '</dt><dd>' + escapeHtml(actionText) + '</dd></div>' +
       '<div><dt>' + label("debug.confidence") + '</dt><dd>' + escapeHtml(diagnostics.confidence == null ? "—" : String(diagnostics.confidence)) + '</dd></div>' +
       '<div><dt>' + label("debug.probabilities") + '</dt><dd>' + escapeHtml(probabilityText) + '</dd></div>' +
+      '<div><dt>' + label("debug.hybridTrace") + '</dt><dd>' + escapeHtml(hybridText) + '</dd></div>' +
+      '<div><dt>' + label("decision.validity") + '</dt><dd>' + escapeHtml(validity) + '</dd></div>' +
       '<div><dt>' + label("debug.totalTokens") + '</dt><dd>' + escapeHtml(totalTokens) + '</dd></div>' +
       '<div><dt>' + label("debug.provider") + '</dt><dd>' + escapeHtml(String(provider)) + '</dd></div>' +
       '<div><dt>' + label("debug.model") + '</dt><dd>' + escapeHtml(String(model)) + '</dd></div>' +
+      '<div><dt>' + label("decision.latency") + '</dt><dd>' + escapeHtml(selectedDebug.latencyMs == null ? "—" : String(selectedDebug.latencyMs) + "ms") + '</dd></div>' +
+      '<div><dt>' + label("decision.retries") + '</dt><dd>' + escapeHtml(selectedDebug.retryCount == null ? "—" : String(selectedDebug.retryCount)) + '</dd></div>' +
+      '<div><dt>' + label("decision.note") + '</dt><dd>' + escapeHtml(selectedDebug.error || selectedDebug.fallbackReason || "—") + '</dd></div>' +
+      '<div><dt>' + label("debug.rawEvents") + '</dt><dd>' + escapeHtml(String(rawEvents)) + '</dd></div>' +
       '</dl>';
   }
 
   function renderDecisionTable(snapshot, mode) {
     const node = $("decisions");
     if (!node) return;
-    const label = (key, params) => localeRuntime.t(key, params);
-    const actionCell = (id, action, debug) => {
-      const details = action ? JSON.stringify(action) : "";
-      const rawType = action && typeof action.type === 'string' ? action.type : '';
-      const translatedType = rawType ? localeRuntime.formatActionType(rawType) : '';
-      const typeDetails = debug && rawType && translatedType !== rawType ? '<br><small>' + escapeHtml(translatedType) + ' (' + escapeHtml(rawType) + ')</small>' : '';
-      return '<div class="action-cell"><code>' + escapeHtml(id || '—') + '</code>' + (details ? '<br><small>' + escapeHtml(details) + '</small>' : '') + typeDetails + '</div>';
-    };
-    const actionLabel = (value, debug) => {
-      if (!value) return '—';
-      const translated = localeRuntime.formatActionType(value);
-      return debug && translated !== value ? translated + ' (' + escapeHtml(value) + ')' : escapeHtml(translated);
-    };
-    const debugRows = (snapshot.lastDecisions || []).map((decision) => '<tr><td>' + escapeHtml(decision.player == null ? '—' : localeRuntime.formatSeat(seats[decision.player])) + '</td><td>' + escapeHtml(decision.agentId || '—') + '</td><td>' + actionCell(decision.requestedActionId, decision.requestedAction, true) + '</td><td>' + actionCell(decision.appliedActionId, decision.appliedAction || (decision.actionType ? { type: decision.actionType } : undefined), true) + '</td><td>' + escapeHtml(decision.isLegal === false ? label('decision.fallback') : label('decision.legal')) + '</td><td>' + escapeHtml(decision.latencyMs == null ? '—' : Number(decision.latencyMs).toFixed(1) + 'ms') + '</td><td>' + escapeHtml((decision.inputTokens == null && decision.outputTokens == null) ? '—' : (decision.inputTokens || 0) + ' / ' + (decision.outputTokens || 0)) + '</td><td>' + escapeHtml(decision.retryCount || 0) + '</td><td>' + escapeHtml(decision.error || decision.fallbackReason || '') + '</td></tr>').join("");
-    const publicRows = (snapshot.lastDecisions || []).map((decision) => '<tr><td>' + escapeHtml(decision.player == null ? '—' : localeRuntime.formatSeat(seats[decision.player])) + '</td><td>' + escapeHtml(decision.agentId || '—') + '</td><td>' + actionLabel(decision.actionType, false) + '</td></tr>').join("");
-    node.innerHTML = mode === "debug"
-      ? '<table><thead><tr><th>' + label('decision.seat') + '</th><th>' + label('decision.agent') + '</th><th>' + label('decision.requested') + '</th><th>' + label('decision.applied') + '</th><th>' + label('decision.validity') + '</th><th>' + label('decision.latency') + '</th><th>' + label('decision.inputOutputTokens') + '</th><th>' + label('decision.retries') + '</th><th>' + label('decision.note') + '</th></tr></thead><tbody>' + (debugRows || '<tr><td colspan="9" class="muted">' + label('table.noDecisions') + '</td></tr>') + '</tbody></table>'
-      : '<table><thead><tr><th>' + label('decision.seat') + '</th><th>' + label('decision.agent') + '</th><th>' + label('decision.action') + '</th></tr></thead><tbody>' + (publicRows || '<tr><td colspan="3" class="muted">' + label('table.noPublicDecisions') + '</td></tr>') + '</tbody></table>';
+    node.innerHTML = "";
   }
 `;
 
@@ -99,7 +105,7 @@ ${tileCatalogRuntimeJs}
   const assetTile = (value, className, ariaLabel) => {
     const text = String(value || "?");
     const asset = text === "Back.svg" ? "Back.svg" : tileAssetFilename(text);
-    return '<span class="tile-image ' + (className || '') + '"' + (ariaLabel ? ' aria-label="' + escapeHtml(ariaLabel) + '"' : '') + '><img src="/assets/tiles/' + encodeURIComponent(asset) + '" alt="' + escapeHtml(ariaLabel || text) + '" decoding="async"></span>';
+    return '<span class="tile-image ' + (className || '') + '"' + (ariaLabel ? ' aria-label="' + escapeHtml(ariaLabel) + '"' : '') + '><span class="tile-body"><img class="tile-face" src="/assets/tiles/' + encodeURIComponent(asset) + '" alt="' + escapeHtml(ariaLabel || text) + '" decoding="async"></span></span>';
   };
   const hiddenHand = (count, drawnTilePending) => {
     const total = Math.max(0, Number(count) || 0);
