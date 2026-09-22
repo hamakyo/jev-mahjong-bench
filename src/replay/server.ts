@@ -72,7 +72,7 @@ export const replayDashboardHtml = `<!doctype html>
     <title data-i18n="title.replay">Jev Mahjong replay</title>
     <link rel="stylesheet" href="/assets/styles.css">
   </head>
-  <body>
+  <body class="replay-page">
     <header><div><h1 data-i18n="title.replay">Jev Mahjong replay</h1><p id="connection" data-i18n="connection.loading">Loading…</p></div><div class="header-tools"><div id="mode" class="mode"></div><label class="locale-control"><span data-i18n="settings.language">Language</span><select id="locale-select"><option value="en" data-i18n="locale.en">English</option><option value="ja" data-i18n="locale.ja">日本語</option></select></label></div></header>
     <main>
       <section class="replay-controls">
@@ -99,7 +99,7 @@ export const replayDashboardHtml = `<!doctype html>
       </section>
       <div id="replay-stage" class="replay-stage">
         <section class="table-section"><h2 data-i18n="table.mahjongTable">Mahjong table</h2><div id="mahjong-table" class="mahjong-table"></div></section>
-        <section id="debug-section" class="debug-section" hidden><h2 data-i18n="sections.analysis">Analysis</h2><div id="debug-inspector" class="debug-inspector"><h3 data-i18n="sections.debugInspector">Inspector</h3><div id="debug-inspector-content"></div></div><div class="raw-debug"><div class="raw-debug-header"><span data-i18n="replay.rawCursor">Raw event cursor</span><span id="cursor-label">0 / 0</span></div><input id="cursor" type="range" min="0" max="0" value="0"><pre id="debug"></pre></div></section>
+        <section id="debug-section" class="debug-section" hidden><h2 data-i18n="sections.analysis">Analysis</h2><div id="debug-inspector" class="debug-inspector"><h3 data-i18n="sections.debugInspector">Inspector</h3><div id="debug-inspector-content"></div></div><details class="raw-debug"><summary data-i18n="debug.rawData">Raw JSON</summary><div class="raw-debug-header"><span data-i18n="replay.rawCursor">Raw event cursor</span><span id="cursor-label">0 / 0</span></div><input id="cursor" type="range" min="0" max="0" value="0"><pre id="debug"></pre></details></section>
       </div>
     </main>
     <script src="/assets/app.js" defer></script>

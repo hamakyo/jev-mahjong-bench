@@ -57,7 +57,7 @@ describe("dashboard i18n", () => {
     expect(messages.ja["debug.legalActions"]).toBe("合法手");
     expect(messages.ja["debug.confidence"]).toBe("確信度");
     expect(messages.ja["debug.probabilities"]).toBe("確率");
-    expect(messages.ja["debug.totalTokens"]).toBe("合計token");
+    expect(messages.ja["debug.totalTokens"]).toBe("合計トークン");
     expect(messages.ja["debug.provider"]).toBe("プロバイダー");
     expect(messages.ja["debug.model"]).toBe("モデル");
   });

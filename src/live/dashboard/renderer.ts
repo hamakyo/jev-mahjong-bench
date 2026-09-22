@@ -32,44 +32,52 @@ export const decisionTableRendererJs = String.raw`
         : hasProviderIdentity(diagnosticProviderMetadata)
           ? diagnosticProviderMetadata
           : {};
-    const decision = selectedDebug.appliedAction || selectedDebug.requestedAction || (seat && snapshot.decisionsBySeat?.[seat] ? snapshot.decisionsBySeat[seat] : (snapshot.lastDecisions || []).find((item) => item.player === selectedPlayer));
-    const actionText = legalActions.map((action) => {
-      const rawType = String(action?.type || "unknown");
-      const translated = localeRuntime.formatActionType(rawType);
-      const typeText = translated === rawType ? rawType : translated + " (" + rawType + ")";
-      return String(action?.id || rawType) + " · " + typeText;
-    }).join(", ") || "—";
-    const probabilityText = diagnostics.probabilities && typeof diagnostics.probabilities === "object" ? JSON.stringify(diagnostics.probabilities) : "—";
-    const inputTokens = typeof selectedDebug.inputTokens === "number" ? selectedDebug.inputTokens : typeof decision?.inputTokens === "number" ? decision.inputTokens : undefined;
-    const outputTokens = typeof selectedDebug.outputTokens === "number" ? selectedDebug.outputTokens : typeof decision?.outputTokens === "number" ? decision.outputTokens : undefined;
-    const totalTokens = inputTokens === undefined && outputTokens === undefined ? "—" : String((inputTokens || 0) + (outputTokens || 0));
+    const decision = (seat && snapshot.decisionsBySeat?.[seat]) || (snapshot.lastDecisions || []).find((item) => item.player === selectedPlayer);
+    const inputTokens = selectedDebug.inputTokens ?? decision?.inputTokens;
+    const outputTokens = selectedDebug.outputTokens ?? decision?.outputTokens;
+    const totalTokens = inputTokens == null && outputTokens == null ? "—" : String((inputTokens || 0) + (outputTokens || 0));
     const provider = selectedProviderMetadata.provider ?? selectedProviderMetadata.providerId ?? "—";
     const model = selectedProviderMetadata.modelId ?? selectedProviderMetadata.model ?? selectedProviderMetadata.requestedModel ?? "—";
-    const appliedText = selectedDebug.appliedAction ? JSON.stringify(selectedDebug.appliedAction) : decision?.actionType || "—";
-    const requestedText = selectedDebug.requestedAction ? JSON.stringify(selectedDebug.requestedAction) : "—";
-    const rawEvents = Array.isArray(selectedDebug.rawEvents) ? selectedDebug.rawEvents.length : 0;
-    const hybridText = diagnostics.hybridTrace && typeof diagnostics.hybridTrace === "object" ? JSON.stringify(diagnostics.hybridTrace) : "—";
-    const validity = selectedDebug.isLegal === undefined ? (decision?.isLegal === undefined ? "—" : String(decision.isLegal)) : String(selectedDebug.isLegal);
+    const jev = diagnosticProviderMetadata.jev || {};
+    const confidence = diagnostics.confidence ?? jev.confidence;
+    const probabilities = diagnostics.probabilities ?? jev.probabilities;
+    const latency = selectedDebug.latencyMs ?? decision?.latencyMs;
+    const isLegal = selectedDebug.isLegal ?? decision?.isLegal;
     const seatFormatter = typeof localeRuntime.formatSeat === "function" ? localeRuntime.formatSeat : (value) => String(value ?? "—");
     const selectedSeatLabel = selectedPlayer == null ? "—" : seatFormatter(typeof tableWindForPlayer === "function" ? tableWindForPlayer(snapshot, selectedPlayer) : selectedPlayer);
-    node.innerHTML = '<dl class="debug-inspector-grid">' +
-      '<div><dt>' + label("decision.agent") + '</dt><dd>' + escapeHtml(selected?.agentId || decision?.agentId || "—") + '</dd></div>' +
-      '<div><dt>' + label("decision.seat") + '</dt><dd>' + escapeHtml(selectedSeatLabel) + '</dd></div>' +
-      '<div><dt>' + label("decision.requested") + '</dt><dd>' + escapeHtml(requestedText) + '</dd></div>' +
-      '<div><dt>' + label("decision.applied") + '</dt><dd>' + escapeHtml(appliedText) + '</dd></div>' +
-      '<div><dt>' + label("debug.legalActions") + '</dt><dd>' + escapeHtml(actionText) + '</dd></div>' +
-      '<div><dt>' + label("debug.confidence") + '</dt><dd>' + escapeHtml(diagnostics.confidence == null ? "—" : String(diagnostics.confidence)) + '</dd></div>' +
-      '<div><dt>' + label("debug.probabilities") + '</dt><dd>' + escapeHtml(probabilityText) + '</dd></div>' +
-      '<div><dt>' + label("debug.hybridTrace") + '</dt><dd>' + escapeHtml(hybridText) + '</dd></div>' +
-      '<div><dt>' + label("decision.validity") + '</dt><dd>' + escapeHtml(validity) + '</dd></div>' +
-      '<div><dt>' + label("debug.totalTokens") + '</dt><dd>' + escapeHtml(totalTokens) + '</dd></div>' +
-      '<div><dt>' + label("debug.provider") + '</dt><dd>' + escapeHtml(String(provider)) + '</dd></div>' +
-      '<div><dt>' + label("debug.model") + '</dt><dd>' + escapeHtml(String(model)) + '</dd></div>' +
-      '<div><dt>' + label("decision.latency") + '</dt><dd>' + escapeHtml(selectedDebug.latencyMs == null ? "—" : String(selectedDebug.latencyMs) + "ms") + '</dd></div>' +
-      '<div><dt>' + label("decision.retries") + '</dt><dd>' + escapeHtml(selectedDebug.retryCount == null ? "—" : String(selectedDebug.retryCount)) + '</dd></div>' +
-      '<div><dt>' + label("decision.note") + '</dt><dd>' + escapeHtml(selectedDebug.error || selectedDebug.fallbackReason || "—") + '</dd></div>' +
-      '<div><dt>' + label("debug.rawEvents") + '</dt><dd>' + escapeHtml(String(rawEvents)) + '</dd></div>' +
-      '</dl>';
+    const actionLabel = (action) => {
+      if (!action) return "—";
+      const value = action.mjai || action;
+      const type = localeRuntime.formatActionType(value.type || action.type || "unknown");
+      const tiles = [value.pai, ...(Array.isArray(value.consumed) ? value.consumed : [])].filter(Boolean);
+      return type + (tiles.length ? " · " + tiles.join(" / ") : "");
+    };
+    const openSections = new Set(Array.from(node.querySelectorAll?.("details[open]") || []).map((item) => item.dataset.inspectorSection));
+    const details = (key, title, content) => '<details class="inspector-details" data-inspector-section="' + key + '"' + (openSections.has(key) ? ' open' : '') + '><summary>' + escapeHtml(title) + '</summary>' + content + '</details>';
+    const json = (value) => '<pre class="inspector-json">' + escapeHtml(JSON.stringify(value, null, 2) ?? "—") + '</pre>';
+    const metric = (key, value) => '<div><dt>' + label(key) + '</dt><dd>' + escapeHtml(value) + '</dd></div>';
+    const actionCard = (key, action, primary) => '<div class="inspector-action' + (primary ? ' applied' : '') + '"><span class="inspector-caption">' + label(key) + '</span><strong>' + escapeHtml(actionLabel(action)) + '</strong>' + (action ? details(key, label("debug.details"), json(action)) : '') + '</div>';
+    const probabilityRows = probabilities && typeof probabilities === "object" ? Object.entries(probabilities).sort((left, right) => Number(right[1]) - Number(left[1])).map(([id, probability]) => {
+      const action = legalActions.find((item) => item.id === id);
+      const number = typeof probability === "number" && Number.isFinite(probability) ? probability : undefined;
+      const display = number === undefined ? String(probability) : (number * 100).toFixed(1) + "%";
+      return '<div class="probability-row"><span>' + escapeHtml(action ? actionLabel(action) : id) + '</span><meter min="0" max="1" value="' + (number === undefined ? 0 : Math.max(0, Math.min(1, number))) + '" aria-label="' + escapeHtml(action ? actionLabel(action) : id) + '"></meter><b>' + escapeHtml(display) + '</b></div>';
+    }).join("") : '<span class="muted">—</span>';
+    const hybrid = diagnostics.hybridTrace;
+    const hybridLabels = { threshold: "debug.threshold", escalated: "debug.escalated", escalationReason: "debug.escalationReason", finalSource: "debug.finalSource" };
+    const hybridRows = hybrid && typeof hybrid === "object" ? Object.entries(hybrid).map(([key, value]) => '<div><dt>' + escapeHtml(hybridLabels[key] ? label(hybridLabels[key]) : key) + '</dt><dd>' + (value && typeof value === "object" ? json(value) : escapeHtml(typeof value === "boolean" ? label(value ? "debug.yes" : "debug.no") : String(value ?? "—"))) + '</dd></div>').join("") : '';
+    const note = selectedDebug.error || selectedDebug.fallbackReason;
+    node.innerHTML = '<div class="inspector-identity"><strong>' + escapeHtml(selected?.agentId || decision?.agentId || "—") + '</strong><span class="inspector-badge">' + escapeHtml(selectedSeatLabel) + '</span>' + (isLegal == null ? '' : '<span class="inspector-badge ' + (isLegal ? 'valid' : 'invalid') + '">' + label(isLegal ? "decision.legal" : "decision.illegal") + '</span>') + '</div>' +
+      '<dl class="debug-inspector-grid">' +
+      metric(diagnostics.hybridTrace ? "debug.jevConfidence" : "debug.confidence", typeof confidence === "number" && Number.isFinite(confidence) ? (confidence * 100).toFixed(1) + "%" : "—") +
+      metric("decision.latency", typeof latency === "number" ? (latency / 1000).toFixed(2) + " s" : "—") +
+      metric("debug.totalTokens", totalTokens) + metric("decision.retries", selectedDebug.retryCount ?? decision?.retryCount ?? "—") + '</dl>' +
+      '<div class="inspector-actions">' + actionCard("decision.applied", selectedDebug.appliedAction || (decision?.actionType ? { type: decision.actionType } : undefined), true) + actionCard("decision.requested", selectedDebug.requestedAction, false) + '</div>' +
+      (note ? '<p class="inspector-note">' + escapeHtml(note) + '</p>' : '') +
+      '<dl class="inspector-fields">' + metric("debug.provider", provider) + metric("debug.model", model) + metric("decision.inputOutputTokens", String(inputTokens ?? "—") + " / " + String(outputTokens ?? "—")) + hybridRows + '</dl>' +
+      details("probabilities", label("debug.probabilities"), '<div class="probability-list">' + probabilityRows + '</div>') +
+      details("legalActions", label("debug.legalActions") + " · " + legalActions.length, '<div class="action-chips">' + legalActions.map((action) => '<span>' + escapeHtml(actionLabel(action)) + '</span>').join("") + '</div>' + details("legalActionData", label("debug.rawData"), json(legalActions)));
+
   }
 
   function renderDecisionTable(snapshot, mode) {
