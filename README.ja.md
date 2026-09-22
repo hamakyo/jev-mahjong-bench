@@ -41,6 +41,29 @@ pnpm bench:sample
 
 サンプルベンチマークはオフラインで実行できます。
 
+### 統合ローカルWeb UI
+
+実験管理用のローカルWeb UIを起動し、表示されたURLを開きます。
+
+```bash
+pnpm web -- --port 3001
+```
+
+Web UIは別のベンチマーク実装を持たず、既存のCLI経路を起動します。Tournament、
+Decision benchmark、Hybrid sweepを作成でき、各Runの設定、状態、canonicalな結果、
+ログ、成果物、Live、Replayへの導線をRun詳細に集約します。Run metadataは
+`results/runs/<run-id>/run.json`へ原子的に保存し、`--runs-dir <path>`で保存先を
+変更できます。
+
+各Runには安定したconfig hashがあります。control planeの停止時に実行中だったRunは、
+再起動時にfailedとして明示されますが、ログと既存成果物は保持します。既定のbind先は
+`127.0.0.1`で認証機能はないため、信頼できないネットワークへ公開しないでください。
+
+APIは`GET/POST /api/runs`、Run詳細・結果・成果物・対局一覧、cancel、Run単位の
+Live snapshot／SSE／control endpointを提供します。`GET /api/models`が返すのは
+provider/model ID、credential設定有無などの安全なmetadataだけで、credential値は
+返しません。
+
 ## 判断ベンチマーク
 
 ```bash

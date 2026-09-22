@@ -55,6 +55,32 @@ The sample benchmark is fully offline.
 The replay importer and full-game bridge use Python through `uv`.  The
 RiichiEnv dependency is pinned to `0.4.10` in `pyproject.toml`/`uv.lock`.
 
+### Unified local Web UI
+
+Start the local experiment control plane and open the printed URL:
+
+```bash
+pnpm web -- --port 3001
+```
+
+The Web UI launches the existing CLI workflows rather than maintaining a
+second benchmark implementation. It supports tournament, decision-benchmark,
+and Hybrid-sweep runs; persists each run under `results/runs/<run-id>/run.json`;
+and exposes configuration, status, canonical results, logs, artifacts, Live,
+and Replay from the run detail page. A different store can be selected with
+`--runs-dir <path>`.
+
+Run metadata is written atomically and includes a stable configuration hash.
+An interrupted `queued` or `running` run is marked failed when the control
+plane restarts, while its logs and benchmark artifacts are preserved. The
+server binds to `127.0.0.1` by default and has no authentication, so it should
+not be exposed to an untrusted network.
+
+The API includes `GET/POST /api/runs`, run detail/results/artifacts/games,
+`POST /api/runs/:runId/cancel`, and run-scoped Live snapshot, SSE, and control
+routes. `GET /api/models` reports only safe model metadata and credential
+availability; it never returns credential values.
+
 ### Run Jev and GPT
 
 ```bash
@@ -153,6 +179,7 @@ should not be redistributed without checking those terms.
 --paired-runs <n>     paired tournament seed blocks (exclusive with --games)
 --port <n>            watch server port; 0 selects an ephemeral port
 --exit-on-complete <bool> watch-only flag for CI smoke tests
+--runs-dir <path>    Web UI run metadata/artifact root (default: results/runs)
 ```
 
 Mortal is configured with a JSON file. `command` is an argv array (never a

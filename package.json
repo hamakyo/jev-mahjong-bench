@@ -22,6 +22,7 @@
     "replay:serve": "tsx src/cli.ts replay:serve",
     "video:export": "tsx src/cli.ts video:export",
     "hybrid:sweep": "tsx src/cli.ts hybrid:sweep",
+    "web": "tsx src/cli.ts web",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "check": "pnpm typecheck && pnpm test",

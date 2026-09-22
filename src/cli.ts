@@ -35,6 +35,9 @@ import { loadModelRegistry } from "./providers/registry.js";
 import { loadPricingSnapshot } from "./providers/pricing.js";
 import { ACTION_SCHEMA_VERSION, PROMPT_VERSION, USAGE_MAPPING_VERSION } from "./providers/prompt.js";
 import type { DecisionRecord } from "./types.js";
+import { RunStore } from "./server/run-store.js";
+import { RunManager } from "./server/run-manager.js";
+import { createWebServer } from "./server/server.js";
 
 interface Flags { [key: string]: string; }
 
@@ -415,6 +418,34 @@ async function runVideoExportCommand(argv: string[]): Promise<void> {
   console.log("Wrote " + resolve(output) + " and metadata");
 }
 
+async function runWebCommand(argv: string[]): Promise<void> {
+  const flags = parseFlags(argv);
+  const host = flags.host ?? "127.0.0.1";
+  const store = new RunStore(resolve(flags["runs-dir"] ?? "results/runs"));
+  const manager = new RunManager(store, projectRoot());
+  await manager.init();
+  const server = createWebServer({
+    manager,
+    host,
+    port: integer(flags, "port", 3_001),
+    projectRoot: projectRoot(),
+  });
+  const port = await server.listen();
+  console.log(`Experiment Web UI: http://${host}:${port}/`);
+  await new Promise<void>((resolvePromise) => {
+    let stopping = false;
+    const stop = () => {
+      if (stopping) return;
+      stopping = true;
+      process.off("SIGINT", stop);
+      process.off("SIGTERM", stop);
+      void server.close().finally(resolvePromise);
+    };
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+  });
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2).filter((argument) => argument !== "--");
   const command = argv[0];
@@ -429,6 +460,7 @@ async function main(): Promise<void> {
   if (command === "replay:serve") return runReplayServeCommand(argv.slice(1));
   if (command === "video:export") return runVideoExportCommand(argv.slice(1));
   if (command === "hybrid:sweep") return runHybridSweep(argv.slice(1));
+  if (command === "web") return runWebCommand(argv.slice(1));
   throw new Error(`Unknown command: ${command}`);
 }
 
